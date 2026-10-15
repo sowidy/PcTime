@@ -1,0 +1,41 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+
+# 本地配置：明文装着数据库密码 / 邮箱授权码，绝不能被 add 进来。
+# 模板是 server/.env.example（那个是给人看的，没有真值，要提交）。
+.env
+.env.local
+
+# Build
+client/build/
+client/dist/
+client/app.ico
+*.spec.bak
+
+# Database (local data)
+*.db
+*.db-shm
+*.db-wal
+
+# 自动导出的 CSV（由数据库生成，属于派生数据）
+client/data/
+client/usage.db
+client/.env
+
+server/.env
+
+# IDE
+.vscode/
+.idea/
+*.swp
+
+# OS
+Thumbs.db
+Desktop.ini
+
+client/
+tests/
+README.md
+app.ico

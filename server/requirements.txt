@@ -1,0 +1,22 @@
+# 服务端依赖。
+#
+# 客户端依赖见 ../client/requirements.txt，两边不要混装：
+# 服务端不需要 PySide6 / pywin32 这些桌面端的东西，客户端也不需要
+# FastAPI / MySQL 驱动。
+#
+# 这个服务端只和客户端之间走 HTTP，客户端那边用的是标准库 urllib，
+# 所以客户端不需要额外的 HTTP 库。
+
+fastapi
+uvicorn
+
+# MySQL 驱动。选 PyMySQL 而不是 mysqlclient，是因为它是纯 Python 实现，
+# 不需要 C 编译器，Windows 上 pip install 一把过。
+# 代价是比 mysqlclient 慢一些，但这里一天才几个请求，无所谓。
+pymysql
+
+# PyMySQL 连 MySQL 8 默认的 caching_sha2_password 认证方式时，需要它来做
+# RSA 公钥加密。不装的话会报：
+#     RuntimeError: 'cryptography' package is required for sha256_password
+#     or caching_sha2_password auth methods
+cryptography
