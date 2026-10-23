@@ -245,11 +245,14 @@ MAIL_ENABLED = bool(SMTP_HOST and MAIL_FROM) and \
 MAIL_SCHEDULER_ENABLED = MAIL_ENABLED and \
     _env("USAGETIME_MAIL_SCHEDULER", "1").lower() not in ("0", "false", "no")
 
-# 每天几点发。默认 23:59:59，也就是「这一天快过完时」发当天的总结。
-MAIL_SEND_TIME = _env("USAGETIME_MAIL_TIME", "23:59:59")
+# 每天几点发。默认次日 00:03，给客户端保留 3 分钟完成前一天最后的数据上报。
+MAIL_SEND_TIME = _env("USAGETIME_MAIL_TIME", "00:03:00")
+
+# Additional mail sections are independent and gracefully degrade on missing data.
+MAIL_TRACKING_ENABLED = _env("USAGETIME_MAIL_TRACKING", "1").lower() not in ("0", "false", "no")
 
 # 补发窗口：服务器半夜重启/宕机导致某天没发出去时，允许在后续几次运行里
-# 把它补上。见 mail/scheduler.py 里关于「23:59:59 这个时刻很微妙」的说明。
+# 把它补上。见 mail/scheduler.py 里关于「触发日与报告日不同」的说明。
 MAIL_CATCHUP_DAYS = int(_env("USAGETIME_MAIL_CATCHUP_DAYS", "2"))
 
 # 一个星期里哪一天发周报，取值 0..6 对应**周一..周日**（跟 date.weekday() 的

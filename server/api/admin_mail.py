@@ -16,7 +16,7 @@ router = APIRouter()
 
 @router.post("/api/v1/admin/daily-mail", dependencies=[Depends(require_admin)])
 def trigger_daily_mail(
-    day: date | None = Query(None, description="发哪一天，默认今天"),
+    day: date | None = Query(None, description="发哪一天，默认昨天"),
     catchup: int = Query(0, ge=0, le=7,
                          description="额外补发前几天（漏发时用）"),
     dry_run: bool = Query(False, description="只渲染不发送，用来检查内容"),
@@ -30,7 +30,7 @@ def trigger_daily_mail(
     两个用途：
         1. 外部 cron 定时（那就把 USAGETIME_MAIL_SCHEDULER 关掉，免得
            进程内定时器和 cron 重复发）。cron 不需要知道周报这回事：
-           周日那次自然就是周报。
+           每天 00:03 调用即可；默认发送昨天，昨天是周报日时自然生成周报。
         2. 排查问题：dry_run=true 先看看内容长什么样，再决定要不要真发。
            results 里每条的 `weekly` 字段会告诉你这一封是哪种。
 

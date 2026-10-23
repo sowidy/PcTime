@@ -29,6 +29,38 @@ CREATE TABLE IF NOT EXISTS `users` (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
   COMMENT='一个 user_key 一行, 代表一台装了客户端的机器';
 
+CREATE TABLE IF NOT EXISTS `device_tokens` (
+  `user_key` CHAR(36) NOT NULL PRIMARY KEY,
+  `token_hash` CHAR(64) NOT NULL,
+  `created_at` DATETIME NOT NULL,
+  FOREIGN KEY (`user_key`) REFERENCES `users` (`user_key`) ON DELETE CASCADE
+);
+
+CREATE TABLE IF NOT EXISTS `website_usage_records` (
+  `id` BIGINT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
+  `user_key` CHAR(36) NOT NULL, `day` DATE NOT NULL,
+  `host` VARCHAR(300) NOT NULL, `display_name` VARCHAR(255) NOT NULL DEFAULT '',
+  `seconds` DOUBLE NOT NULL, `uploaded_at` DATETIME NOT NULL,
+  UNIQUE KEY `uk_site` (`user_key`,`day`,`host`),
+  FOREIGN KEY (`user_key`) REFERENCES `users` (`user_key`) ON DELETE CASCADE
+);
+
+CREATE TABLE IF NOT EXISTS `app_timeline_bins` (
+  `id` BIGINT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
+  `user_key` CHAR(36) NOT NULL, `day` DATE NOT NULL,
+  `bucket` TINYINT UNSIGNED NOT NULL, `app_name` VARCHAR(255) NOT NULL,
+  `seconds` DOUBLE NOT NULL, `uploaded_at` DATETIME NOT NULL,
+  UNIQUE KEY `uk_timeline` (`user_key`,`day`,`bucket`,`app_name`),
+  FOREIGN KEY (`user_key`) REFERENCES `users` (`user_key`) ON DELETE CASCADE
+);
+
+CREATE TABLE IF NOT EXISTS `tracking_uploads` (
+  `user_key` CHAR(36) NOT NULL, `day` DATE NOT NULL, `kind` VARCHAR(16) NOT NULL,
+  `complete` BOOLEAN NOT NULL DEFAULT FALSE, `uploaded_at` DATETIME NOT NULL,
+  PRIMARY KEY (`user_key`,`day`,`kind`),
+  FOREIGN KEY (`user_key`) REFERENCES `users` (`user_key`) ON DELETE CASCADE
+);
+
 CREATE TABLE IF NOT EXISTS `usage_records` (
   `id`           BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
   `user_key`     CHAR(36)        NOT NULL,

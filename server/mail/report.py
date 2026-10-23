@@ -185,38 +185,36 @@ def _html_shell(heading, totals_html, extra_html, rows):
     加上设备行。空串就不占位。
     """
     return f"""<!DOCTYPE html>
-<html><head><meta charset="utf-8"></head>
-<body style="margin:0;padding:24px 12px;background:#f5f6f7;
-             font-family:-apple-system,'Segoe UI','Microsoft YaHei',sans-serif;">
-  <div style="max-width:620px;margin:0 auto;background:#fff;border-radius:12px;
-              padding:24px;">
-    <div style="color:#5f6368;font-size:13px;letter-spacing:1px;">USAGETIME</div>
-    <div style="font-size:22px;font-weight:600;color:#202124;margin-top:6px;">
-      {heading}
-    </div>
-    <div style="color:#202124;font-size:15px;margin-top:12px;">
-      {totals_html}
-    </div>
-    {extra_html}
-    <table style="width:100%;border-collapse:collapse;margin-top:18px;
-                  font-size:14px;">
-      <thead>
-        <tr style="color:#9aa0a6;font-size:12px;text-align:left;">
-          <th style="padding:6px;"></th>
-          <th style="padding:6px;font-weight:500;">应用</th>
-          <th style="padding:6px;font-weight:500;text-align:right;">时长</th>
-          <th style="padding:6px;font-weight:500;text-align:right;">占比</th>
-          <th style="padding:6px;font-weight:500;text-align:right;">启动</th>
-        </tr>
-      </thead>
-      <tbody>{''.join(rows)}</tbody>
-    </table>
-    <div style="margin-top:24px;padding-top:14px;border-top:1px solid #eceff1;
-                color:#9aa0a6;font-size:12px;line-height:1.7;">
-      {html.escape(FOOTER_TEXT)}
-    </div>
-  </div>
-</body></html>"""
+    <html><head><meta charset="utf-8"></head>
+    <body style="margin:0;padding:24px 12px;background:#f5f6f7;font-family:-apple-system,'Segoe UI','Microsoft YaHei',sans-serif;">
+        <div style="max-width:620px;margin:0 auto;background:#fff;border-radius:12px;padding:24px;">
+            <div style="color:#5f6368;font-size:13px;letter-spacing:1px;">USAGETIME</div>
+            <div style="font-size:22px;font-weight:600;color:#202124;margin-top:6px;">
+                {heading}
+            </div>
+            <div style="color:#202124;font-size:15px;margin-top:12px;">
+              {totals_html}
+            </div>
+            {extra_html}
+            <table style="width:100%;border-collapse:collapse;margin-top:18px;font-size:14px;">
+                <thead>
+                    <tr style="color:#9aa0a6;font-size:12px;text-align:left;">
+                      <th style="padding:6px;"></th>
+                      <th style="padding:6px;font-weight:500;">应用</th>
+                      <th style="padding:6px;font-weight:500;text-align:right;">时长</th>
+                      <th style="padding:6px;font-weight:500;text-align:right;">占比</th>
+                      <th style="padding:6px;font-weight:500;text-align:right;">启动</th>
+                    </tr>
+                </thead>
+                <tbody>{''.join(rows)}</tbody>
+            </table>
+            <!-- tracking-sections -->
+            <div style="margin-top:24px;padding-top:14px;border-top:1px solid #eceff1;color:#9aa0a6;font-size:12px;line-height:1.7;">
+            {html.escape(FOOTER_TEXT)}
+            </div>
+        </div>
+    </body>
+    </html>"""
 
 
 def _period_line(start, end, summary):
@@ -275,6 +273,17 @@ def build_message(day, summary, user=None):
         build_text(day, summary, user),
         build_html(day, summary, user),
     )
+
+
+def build_missing_app_message(day, user=None, weekly=False):
+    """Website data can arrive first; absence is not zero usage."""
+    start, end = week_range(day) if weekly else (day, day)
+    period = f"{start} ~ {end}" if weekly else str(day)
+    heading = f"{period} {'周报' if weekly else '使用报告'}"
+    note = "应用汇总尚未收到，暂展示已收到的网站明细。"
+    return (f"【UsageTime】{heading} · 应用汇总未收到",
+            f"{heading}\n{note}\n\n{FOOTER_TEXT}",
+            _html_shell(html.escape(heading), html.escape(note), _html_device_row(user), []))
 
 
 # ── 周报 ──────────────────────────────────────────────────────

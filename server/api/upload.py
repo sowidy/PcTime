@@ -66,6 +66,11 @@ def upload(req: UploadRequest):
                         cur, req.user_key, d.day,
                         [a.model_dump() for a in d.apps], now=now,
                     )
+                    # A new snapshot invalidates the prior day-end confirmation, even
+                    # if its total happens to match. The authenticated completion
+                    # endpoint confirms the newly uploaded snapshot separately.
+                    cur.execute("UPDATE tracking_uploads SET complete=FALSE WHERE user_key=%s "
+                                "AND day=%s AND kind='apps'", (req.user_key, d.day))
                     days_written += 1
                     apps_written += n
     except pymysql.MySQLError as e:

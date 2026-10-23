@@ -35,7 +35,15 @@ server/.env
 Thumbs.db
 Desktop.ini
 
-client/
-tests/
-README.md
+.venv/
+client/*.log
+client/.pytest_cache/
+tests/.pytest_cache/
 app.ico
+artifacts/
+
+client/
+*.md
+# Local verification, preview and release helper scripts; neither client nor server imports these.
+/tools/
+tests/

@@ -37,8 +37,7 @@ def send_mail(to, subject, text, html_body):
     msg = MIMEMultipart("alternative")
     # 主题里有中文，必须显式编码，否则会出现乱码或直接被拒
     msg["Subject"] = Header(subject, "utf-8")
-    msg["From"] = formataddr((str(Header(config.MAIL_FROM_NAME, "utf-8")),
-                              config.MAIL_FROM))
+    msg["From"] = formataddr((str(Header(config.MAIL_FROM_NAME, "utf-8")),config.MAIL_FROM))
     msg["To"] = to
     msg["Date"] = formatdate(localtime=True)
     domain = config.MAIL_FROM.split("@")[-1] if "@" in config.MAIL_FROM else None
@@ -48,11 +47,9 @@ def send_mail(to, subject, text, html_body):
     msg.attach(MIMEText(html_body, "html", "utf-8"))
 
     if config.SMTP_USE_SSL:
-        server = smtplib.SMTP_SSL(config.SMTP_HOST, config.SMTP_PORT,
-                                  timeout=config.SMTP_TIMEOUT)
+        server = smtplib.SMTP_SSL(config.SMTP_HOST, config.SMTP_PORT,timeout=config.SMTP_TIMEOUT)
     else:
-        server = smtplib.SMTP(config.SMTP_HOST, config.SMTP_PORT,
-                              timeout=config.SMTP_TIMEOUT)
+        server = smtplib.SMTP(config.SMTP_HOST, config.SMTP_PORT,timeout=config.SMTP_TIMEOUT)
 
     # with 退出时会 quit()，异常路径下也会尽量把连接关掉，不留半开连接
     with server:
@@ -102,8 +99,7 @@ def send_day(user_key, day, email=None, dry_run=False, now=None):
     """
     day = day if isinstance(day, date) else date.fromisoformat(str(day))
     weekly = is_weekly_day(day)
-    out = {"user_key": user_key, "day": day.isoformat(),
-           "email": email or "", "subject": "", "weekly": weekly}
+    out = {"user_key": user_key, "day": day.isoformat(),"email": email or "", "subject": "", "weekly": weekly}
 
     if mail_log.was_mail_sent(user_key, day):
         return {**out, "status": "skipped", "reason": "already_sent"}
@@ -117,14 +113,41 @@ def send_day(user_key, day, email=None, dry_run=False, now=None):
         summary = usage_records.get_range_summary(user_key, start, end)
     else:
         summary = usage_records.get_daily_summary(user_key, day)
+    timeline_rows, site_rows, readiness = [], [], []
+    if config.MAIL_TRACKING_ENABLED:
+        from db import tracking
+        try:
+            range_start, range_end = report.week_range(day) if weekly else (day, day)
+            timeline_rows = tracking.read_range("timeline", user_key, range_start, range_end)
+            site_rows = tracking.read_range("web", user_key, range_start, range_end)
+            readiness = tracking.readiness(user_key, range_start, range_end)
+            if (timeline_rows or site_rows) and not any(
+                    str(r["day"]) == str(day) and r["kind"] == "apps" and r["complete"] for r in readiness):
+                log.warning("报告应用数据尚未确认日终完成 user=%s day=%s", user_key, day)
+        except Exception:
+            log.warning("附加报告数据不可用，继续生成原应用报告", exc_info=True)
+    app_summary_missing = summary is None
+    if summary is None and site_rows:
+        # Never use website/timeline durations as the device total.
+        summary = {"total_seconds": 0, "app_count": 0, "apps": []}
     if summary is None:
         return {**out, "status": "skipped", "reason": "no_data"}
 
     user = users.get_user(user_key)
-    if weekly:
+    if app_summary_missing:
+        subject, text, html_body = report.build_missing_app_message(day, user, weekly)
+    elif weekly:
         subject, text, html_body = report.build_weekly_message(day, summary, user)
     else:
         subject, text, html_body = report.build_message(day, summary, user)
+    if timeline_rows or site_rows:
+        from mail.tracking_report import append_sections
+        try:
+            subject, text, html_body = append_sections(
+                (subject, text, html_body), summary, timeline_rows, site_rows,
+                range_start, range_end, readiness)
+        except Exception:
+            log.warning("附加报告渲染失败，继续发送应用报告", exc_info=True)
     out["subject"] = subject
 
     if dry_run:
@@ -136,17 +159,14 @@ def send_day(user_key, day, email=None, dry_run=False, now=None):
         detail = f"{type(e).__name__}: {e}"
         # 失败也留痕：用户来问「怎么没收到」时，这张表就是答案
         try:
-            mail_log.record_mail(user_key, day, email, mail_log.MAIL_FAILED,
-                                 detail, now=now)
+            mail_log.record_mail(user_key, day, email, mail_log.MAIL_FAILED,detail, now=now)
         except Exception as log_err:             # noqa: BLE001
             log.warning("连失败记录都写不进去：%s", log_err)
-        log.warning("%s发送失败 user=%s day=%s to=%s：%s",
-                    "周报" if weekly else "日报", user_key, day, email, detail)
+        log.warning("%s发送失败 user=%s day=%s to=%s：%s","周报" if weekly else "日报", user_key, day, email, detail)
         return {**out, "status": "failed", "reason": detail}
 
     try:
-        mail_log.record_mail(user_key, day, email, mail_log.MAIL_SENT, subject,
-                             now=now)
+        mail_log.record_mail(user_key, day, email, mail_log.MAIL_SENT, subject,now=now)
     except Exception as e:                       # noqa: BLE001
         # 信已经发出去了，记录没写上。最坏结果是下次运行重发一封，
         # 比「明明发了却因为写记录失败而报错」要好。
@@ -162,11 +182,12 @@ def run(day=None, catchup_days=0, dry_run=False, user_key=None, now=None):
 
     发的是日报还是周报，由每一天自己决定（见 is_weekly_day）—— 所以传进来的
     日子里有周报日时，那一封就是周报，调用方不用区分。外部 cron 因此也完全
-    不用改：照旧调 POST /api/v1/admin/daily-mail，周日那次自然变成周报。
+    不用改：每天 00:03 照旧调 POST /api/v1/admin/daily-mail，默认会发送昨天；
+    昨天是周报日时自然生成周报。
 
     参数：
-        day          发哪一天，默认今天。注意「今天」只有在 23:59:59 发才
-                     是完整的一天 —— 手工触发时请自己确认这一点。
+        day          发哪一天，默认昨天，保证默认路径只处理已经结束且留出
+                     数据上传缓冲的完整自然日。显式传日期用于手工补发/排查。
         catchup_days 顺带补发前几天（默认 0）。定时器和启动补发会带上它，
                      这样某天因为重启没发出去时能自愈。已经发过的会被
                      mail_log 挡掉，不会重复发。补发出来的报告种类也是那一天
@@ -181,12 +202,11 @@ def run(day=None, catchup_days=0, dry_run=False, user_key=None, now=None):
          "reason": 整轮没跑成时的原因}
     """
     now = now or datetime.now()
-    target = day or now.date()
+    target = day or (now.date() - timedelta(days=1))
     if not isinstance(target, date):
         target = date.fromisoformat(str(target))
 
-    result = {"ok": False, "day": target.isoformat(), "days": [],
-              "sent": 0, "skipped": 0, "failed": 0, "results": []}
+    result = {"ok": False, "day": target.isoformat(), "days": [],"sent": 0, "skipped": 0, "failed": 0, "results": []}
 
     if not config.MAIL_ENABLED:
         result["reason"] = "disabled"
@@ -194,8 +214,7 @@ def run(day=None, catchup_days=0, dry_run=False, user_key=None, now=None):
 
     # 补发的日子只取「已经过完的」。哪怕调用方手滑把 day 传成了明天，
     # 也不会把还没结束的一天当报告发出去。
-    days = [target] + [target - timedelta(days=i)
-                       for i in range(1, max(0, int(catchup_days)) + 1)]
+    days = [target] + [target - timedelta(days=i) for i in range(1, max(0, int(catchup_days)) + 1)]
     days = [d for d in days if d <= now.date()]
     result["days"] = [d.isoformat() for d in days]
 
