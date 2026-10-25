@@ -9,6 +9,7 @@
 """
 import contextlib
 import os
+import re
 from datetime import datetime
 
 import pymysql
@@ -18,6 +19,8 @@ import config
 
 # schema.sql 和本文件在同一个目录（server/db/），跟着服务端一起部署
 _SCHEMA_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "schema.sql")
+REQUIRED_TABLES = frozenset(("users", "usage_records", "mail_log", "device_tokens",
+                             "website_usage_records", "app_timeline_bins", "tracking_uploads"))
 
 
 # ── 连接 ──────────────────────────────────────────────────────
@@ -107,21 +110,25 @@ def init_schema():
     """建库 + 建表。服务端启动时调用一次，重复调用是安全的。
 
     表结构定义在 schema.sql 里（唯一的一份），这里只是把它执行一遍。
-    这样「手工执行 schema.sql」和「服务端自动建表」不会长出两套不同的表。
-
-    如果数据库账号没有 CREATE 权限（生产环境本来就该这样），
-    这里会抛异常，按提示手工建库即可。
+    新表的 user_key 字符集会匹配已有 users 表，兼容旧部署的排序规则。
+    运行账号没有 DDL 权限时，先用建表账号初始化，再设置 DB_INIT_SCHEMA=0。
     """
     db_name = _check_db_name(config.DB_NAME)
+
+    if not config.DB_INIT_SCHEMA:
+        check_schema()
+        return
 
     # ① 建库。这一步必须不选库连接，因为库还不存在。
     with connect(with_db=False) as conn:
         with conn.cursor() as cur:
-            cur.execute(
-                "CREATE DATABASE IF NOT EXISTS `%s` "
-                "DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci"
-                % db_name
-            )
+            cur.execute("SELECT SCHEMA_NAME FROM information_schema.SCHEMATA WHERE SCHEMA_NAME=%s",
+                        (db_name,))
+            if cur.fetchone() is None:
+                cur.execute(
+                    "CREATE DATABASE IF NOT EXISTS `%s` "
+                    "DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci" % db_name
+                )
 
     # ② 建表。schema.sql 里全是 CREATE TABLE IF NOT EXISTS，重复跑没事。
     with open(_SCHEMA_FILE, encoding="utf-8") as fh:
@@ -129,8 +136,40 @@ def init_schema():
 
     with connect() as conn:
         with conn.cursor() as cur:
+            parent_charset = None
             for stmt in statements:
+                # Existing users.user_key may use general_ci or another charset.
+                # MySQL requires FK columns to match the parent *column*, even
+                # when the database default or table default is different.
+                if parent_charset is not None:
+                    charset, collation = parent_charset
+                    stmt = re.sub(r"(`user_key`\s+CHAR\(36\))",
+                                  rf"\1 CHARACTER SET {charset} COLLATE {collation}",
+                                  stmt, flags=re.IGNORECASE)
                 cur.execute(stmt)
+                if parent_charset is None:
+                    cur.execute("SELECT CHARACTER_SET_NAME, COLLATION_NAME FROM information_schema.COLUMNS "
+                                "WHERE TABLE_SCHEMA=%s AND TABLE_NAME='users' AND COLUMN_NAME='user_key'",
+                                (db_name,))
+                    row = cur.fetchone()
+                    if not row or not all(re.fullmatch(r"[a-zA-Z0-9_]+", row[k] or "")
+                                          for k in ("CHARACTER_SET_NAME", "COLLATION_NAME")):
+                        raise RuntimeError("无法读取 users.user_key 字符集，请检查已有表结构")
+                    parent_charset = row["CHARACTER_SET_NAME"], row["COLLATION_NAME"]
+    check_schema()
+
+
+def check_schema():
+    """Read-only readiness check: report incomplete deployments before serving requests."""
+    with connect() as conn:
+        with conn.cursor() as cur:
+            cur.execute("SELECT TABLE_NAME FROM information_schema.TABLES WHERE TABLE_SCHEMA=%s",
+                        (config.DB_NAME,))
+            found = {row["TABLE_NAME"] for row in cur.fetchall()}
+    missing = REQUIRED_TABLES - found
+    if missing:
+        raise RuntimeError("数据库缺少表：%s；请用建表账号设置 USAGETIME_DB_INIT_SCHEMA=1 初始化"
+                           % ", ".join(sorted(missing)))
 
 
 def row_to_json(row):

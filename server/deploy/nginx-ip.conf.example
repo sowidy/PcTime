@@ -1,0 +1,27 @@
+# Replace YOUR_PUBLIC_IP after obtaining an IP-SAN certificate.
+# Keep FastAPI on 127.0.0.1:8000 and block public access to port 8000.
+server {
+    listen 80;
+    server_name YOUR_PUBLIC_IP;
+    location ^~ /.well-known/acme-challenge/ {
+        root /var/www/acme;
+    }
+    location / {
+        return 308 https://$host$request_uri;
+    }
+}
+
+server {
+    listen 443 ssl;
+    server_name YOUR_PUBLIC_IP;
+    ssl_certificate /etc/letsencrypt/live/YOUR_PUBLIC_IP/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/YOUR_PUBLIC_IP/privkey.pem;
+    ssl_protocols TLSv1.2 TLSv1.3;
+    client_max_body_size 2m;
+    location / {
+        proxy_pass http://127.0.0.1:8000;
+        proxy_set_header Host $host;
+        proxy_set_header X-Forwarded-Proto https;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+    }
+}

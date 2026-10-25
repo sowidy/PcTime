@@ -157,6 +157,10 @@ DB_PASSWORD = _env("USAGETIME_DB_PASSWORD", "")
 # 一部分生僻字。应用显示名里出现这些字符时，"utf8" 会直接报错或截断。
 DB_CHARSET = "utf8mb4"
 
+# Existing installations can initialize with a DDL account once, then run with
+# SELECT/INSERT/UPDATE/DELETE only. Missing tables remain a startup error.
+DB_INIT_SCHEMA = _env("USAGETIME_DB_INIT_SCHEMA", "1").lower() not in ("0", "false", "no")
+
 # ⚠️ 用 root 连数据库是能跑，但不应该长期这样：
 #    root 对整台 MySQL 有全部权限，一旦服务端被攻破（比如接口有注入漏洞），
 #    攻击者拿到的不只是 usagetime 这个库，而是整台数据库服务器。

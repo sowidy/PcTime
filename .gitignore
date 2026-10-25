@@ -20,7 +20,7 @@ client/app.ico
 *.db-wal
 
 # 自动导出的 CSV（由数据库生成，属于派生数据）
-client/data/
+client/
 client/usage.db
 client/.env
 
@@ -42,7 +42,8 @@ tests/.pytest_cache/
 app.ico
 artifacts/
 
-client/
+# Keep both independently deployable components and their READMEs in Git.
+# Local planning/verification notes are not deployment documentation.
 *.md
 # Local verification, preview and release helper scripts; neither client nor server imports these.
 /tools/
