@@ -1,0 +1,18 @@
+<!doctype html>
+<html lang="zh-CN"><meta charset="utf-8"><title>PcTime 连接状态</title>
+<body style="max-width:620px;margin:64px auto;padding:0 24px;font:16px system-ui;line-height:1.8;color:#233044;background:#f8fafc">
+<h1>PcTime 网站记录</h1>
+<p>扩展会自动连接本机 PcTime，无需填写配对码。</p>
+<p id="status" role="status" style="padding:16px;background:#e8eef7;border-radius:10px">正在检查连接…</p>
+<p>请启动新版 PcTime 桌面端，在设置中勾选「启用本地网站统计」。连接成功后，浏览网页即可记录。</p>
+<p>只记录前台、非隐身网页的域名和时长；地址路径、搜索词及标题不会发送。</p>
+<p><label>浏览器 <select id="browser"><option value="auto">自动识别（推荐）</option><option value="chrome">Chrome</option>
+<option value="edge">Edge</option><option value="brave">Brave</option>
+<option value="vivaldi">Vivaldi</option></select></label></p>
+<button id="save" style="padding:10px 20px;cursor:pointer">重新连接</button>
+<details style="margin-top:28px"><summary>高级兼容设置</summary>
+<p>随附新版桌面端无需配置。连接旧版桌面端时，仍需登记此扩展 ID 并填写旧版配对码：</p>
+<code id="extension-id" style="overflow-wrap:anywhere"></code>
+<p><label>旧版配对码 <input id="token" type="password" autocomplete="off" size="36"></label></p>
+<p>更改高级设置后点击「重新连接」。</p></details>
+<script type="module" src="options.js"></script></body></html>

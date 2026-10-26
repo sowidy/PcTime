@@ -5,9 +5,9 @@ services:
     image: mysql:8.0
     environment:
       MYSQL_RANDOM_ROOT_PASSWORD: "yes"
-      MYSQL_DATABASE: usagetime
-      MYSQL_USER: usagetime
-      MYSQL_PASSWORD: ${USAGETIME_DB_PASSWORD:?Set USAGETIME_DB_PASSWORD in server/.env}
+      MYSQL_DATABASE: ${PCTIME_DB_NAME:-pctime}
+      MYSQL_USER: ${PCTIME_DB_USER:-pctime}
+      MYSQL_PASSWORD: ${PCTIME_DB_PASSWORD:?Set PCTIME_DB_PASSWORD in server/.env}
       TZ: Asia/Shanghai
     volumes:
       - mysql-data:/var/lib/mysql
@@ -21,16 +21,16 @@ services:
     build: .
     env_file: .env
     environment:
-      USAGETIME_DB_HOST: db
-      USAGETIME_DB_PORT: "3306"
-      USAGETIME_DB_USER: usagetime
-      USAGETIME_DB_NAME: usagetime
-      USAGETIME_DB_INIT_SCHEMA: "1"
-      USAGETIME_HOST: 0.0.0.0
-      USAGETIME_PORT: "8000"
+      PCTIME_DB_HOST: db
+      PCTIME_DB_PORT: "3306"
+      PCTIME_DB_USER: ${PCTIME_DB_USER:-pctime}
+      PCTIME_DB_NAME: ${PCTIME_DB_NAME:-pctime}
+      PCTIME_DB_INIT_SCHEMA: "1"
+      PCTIME_HOST: 0.0.0.0
+      PCTIME_PORT: "8000"
       TZ: Asia/Shanghai
     ports:
-      - "${USAGETIME_PUBLISH_HOST:-127.0.0.1}:${USAGETIME_PORT:-8000}:8000"
+      - "${PCTIME_PUBLISH_HOST:-127.0.0.1}:${PCTIME_PORT:-8000}:8000"
     depends_on:
       db:
         condition: service_healthy

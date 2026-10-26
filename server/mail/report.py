@@ -6,23 +6,23 @@
       正文是按应用**跨天聚合**过的（数据源不同：日报用 get_daily_summary，
       周报用 get_range_summary，见 db/usage_records.py）。
 
-两者的抬头、周期行不一样，但应用排行那几行、折叠行、HTML 外壳全都走同一组
-私有 helper（_text_app_lines / _html_app_rows / _html_shell），所以两边的排版
-不可能各自漂移。
+两者共用纯文本明细和 HTML 外壳；HTML 使用 charts 模块生成柔色堆叠柱与折线，
+不再输出排行表。周报按真实每日应用汇总绘图，日报可用时间线按小时绘图。
 
 **哪天发周报不在这里决定** —— 本模块只管「给定区间和汇总怎么渲染」，
 「周日发周报」那条策略在 mail/sender.py。这样这个模块保持纯计算。
 
 这个模块是**纯计算**的 —— 不碰数据库、不碰网络，所以 dry_run 和单元测试
-都能直接调它检查内容。想确认「邮件长什么样」，看这一个文件就够了。
+都能直接调它检查内容；可选时间线与网站图由 tracking_report 追加。
 """
 import html
 from datetime import timedelta
 
 import config
+from mail.charts import application_chart
 
 FOOTER_TEXT = (
-    "本邮件由 UsageTime 服务端自动发送。想停掉它，可以让服务端不再配置 "
+    "本邮件由 PcTime 服务端自动发送。想停掉它，可以让服务端不再配置 "
     "SMTP，或者调用 POST /api/v1/subscription/<你的设备ID> 退订。"
 )
 
@@ -43,7 +43,7 @@ def format_duration(seconds):
 
 def build_subject(day, summary):
     """日报主题。周报的主题在 build_weekly_subject。"""
-    return (f"【UsageTime】{day.isoformat()} 使用报告 · "
+    return (f"【PcTime】{day.isoformat()} 使用报告 · "
             f"共 {format_duration(summary['total_seconds'])}")
 
 
@@ -107,12 +107,12 @@ def _totals_text(summary):
 
 
 def _text_app_lines(apps, total, hidden_count, hidden_seconds):
-    """应用排行那几行（纯文本版）。日报和周报共用。"""
+    """无图片客户端使用的应用明细（不编号），日报和周报共用。"""
     lines = []
-    for i, app in enumerate(apps, 1):
+    for app in apps:
         pct = _pct(app["seconds"], total)
         lines.append(
-            f"{i:>3}. {_app_label(app)} — {format_duration(app['seconds'])}"
+            f"• {_app_label(app)} — {format_duration(app['seconds'])}"
             f"（{pct:.1f}%，启动 {int(app['launches'])} 次）"
         )
     if hidden_count:
@@ -120,39 +120,6 @@ def _text_app_lines(apps, total, hidden_count, hidden_seconds):
             f"     （另有 {hidden_count} 个应用未列出，合计 {format_duration(hidden_seconds)}）"
         )
     return lines
-
-
-def _html_app_rows(apps, total, hidden_count, hidden_seconds):
-    """应用排行那些 <tr>（HTML 版）。日报和周报共用。"""
-    rows = []
-    for i, app in enumerate(apps, 1):
-        pct = _pct(app["seconds"], total)
-        rows.append(
-            '<tr>'
-            f'<td style="padding:7px 6px;color:#9aa0a6;text-align:right;'
-            f'vertical-align:top;">{i}</td>'
-            '<td style="padding:7px 6px;">'
-            f'<div style="color:#202124;">{html.escape(_app_label(app))}</div>'
-            f'<div style="margin-top:4px;height:6px;border-radius:3px;'
-            f'background:#4FC08D;width:{pct:.1f}%;"></div>'
-            '</td>'
-            f'<td style="padding:7px 6px;text-align:right;white-space:nowrap;'
-            f'color:#202124;">{format_duration(app["seconds"])}</td>'
-            f'<td style="padding:7px 6px;text-align:right;color:#9aa0a6;'
-            f'white-space:nowrap;">{pct:.1f}%</td>'
-            f'<td style="padding:7px 6px;text-align:right;color:#9aa0a6;'
-            f'white-space:nowrap;">{int(app["launches"])}</td>'
-            '</tr>'
-        )
-
-    if hidden_count:
-        rows.append(
-            '<tr><td></td>'
-            '<td colspan="4" style="padding:7px 6px;color:#9aa0a6;'
-            f'font-size:13px;">另有 {hidden_count} 个应用未列出，'
-            f'合计 {format_duration(hidden_seconds)}</td></tr>'
-        )
-    return rows
 
 
 def _html_device_row(user):
@@ -188,7 +155,7 @@ def _html_shell(heading, totals_html, extra_html, rows):
     <html><head><meta charset="utf-8"></head>
     <body style="margin:0;padding:24px 12px;background:#f5f6f7;font-family:-apple-system,'Segoe UI','Microsoft YaHei',sans-serif;">
         <div style="max-width:620px;margin:0 auto;background:#fff;border-radius:12px;padding:24px;">
-            <div style="color:#5f6368;font-size:13px;letter-spacing:1px;">USAGETIME</div>
+            <div style="color:#5f6368;font-size:13px;letter-spacing:1px;">PcTime</div>
             <div style="font-size:22px;font-weight:600;color:#202124;margin-top:6px;">
                 {heading}
             </div>
@@ -196,18 +163,7 @@ def _html_shell(heading, totals_html, extra_html, rows):
               {totals_html}
             </div>
             {extra_html}
-            <table style="width:100%;border-collapse:collapse;margin-top:18px;font-size:14px;">
-                <thead>
-                    <tr style="color:#9aa0a6;font-size:12px;text-align:left;">
-                      <th style="padding:6px;"></th>
-                      <th style="padding:6px;font-weight:500;">应用</th>
-                      <th style="padding:6px;font-weight:500;text-align:right;">时长</th>
-                      <th style="padding:6px;font-weight:500;text-align:right;">占比</th>
-                      <th style="padding:6px;font-weight:500;text-align:right;">启动</th>
-                    </tr>
-                </thead>
-                <tbody>{''.join(rows)}</tbody>
-            </table>
+            {''.join(rows)}
             <!-- tracking-sections -->
             <div style="margin-top:24px;padding-top:14px;border-top:1px solid #eceff1;color:#9aa0a6;font-size:12px;line-height:1.7;">
             {html.escape(FOOTER_TEXT)}
@@ -239,7 +195,7 @@ def build_text(day, summary, user=None):
     apps, hidden_count, hidden_seconds = _visible_apps(summary, config.MAIL_MAX_APPS)
 
     lines = [
-        "UsageTime 每日使用报告",
+        "PcTime 每日使用报告",
         "=" * 24,
         "",
         f"日期：{day.isoformat()}",
@@ -255,13 +211,12 @@ def build_text(day, summary, user=None):
 def build_html(day, summary, user=None):
     """日报的 HTML 正文。"""
     total, app_count = _totals_text(summary)
-    apps, hidden_count, hidden_seconds = _visible_apps(summary, config.MAIL_MAX_APPS)
 
     return _html_shell(
         heading=f"{html.escape(day.isoformat())} 使用报告",
         totals_html=_html_totals(total, app_count),
         extra_html=_html_device_row(user),
-        rows=_html_app_rows(apps, total, hidden_count, hidden_seconds),
+        rows=[application_chart(summary, day, day)],
     )
 
 
@@ -280,8 +235,8 @@ def build_missing_app_message(day, user=None, weekly=False):
     start, end = week_range(day) if weekly else (day, day)
     period = f"{start} ~ {end}" if weekly else str(day)
     heading = f"{period} {'周报' if weekly else '使用报告'}"
-    note = "应用汇总尚未收到，暂展示已收到的网站明细。"
-    return (f"【UsageTime】{heading} · 应用汇总未收到",
+    note = "应用汇总尚未收到，暂展示已收到的网站或时间线数据。"
+    return (f"【PcTime】{heading} · 应用汇总未收到",
             f"{heading}\n{note}\n\n{FOOTER_TEXT}",
             _html_shell(html.escape(heading), html.escape(note), _html_device_row(user), []))
 
@@ -291,14 +246,14 @@ def build_missing_app_message(day, user=None, weekly=False):
 def build_weekly_subject(day, summary):
     """周报主题。带上区间，收件箱里一眼就能和日报区分开。"""
     start, end = week_range(day)
-    return (f"【UsageTime】{start.isoformat()} ~ {end.isoformat()} 周报 · "
+    return (f"【PcTime】{start.isoformat()} ~ {end.isoformat()} 周报 · "
             f"共 {format_duration(summary['total_seconds'])}")
 
 
 def build_weekly_text(day, summary, user=None):
     """周报的纯文本正文。day 是这一周的**最后一天**（默认周日）。
 
-    和日报共用 _text_app_lines —— 应用排行那几行是同一套渲染，不同的只有
+    和日报共用 _text_app_lines —— 应用明细是同一套渲染，不同的只有
     抬头、「周期」行，以及多出来的「有数据 N 天」。
     """
     start, end = week_range(day)
@@ -306,7 +261,7 @@ def build_weekly_text(day, summary, user=None):
     apps, hidden_count, hidden_seconds = _visible_apps(summary, config.MAIL_MAX_APPS)
 
     lines = [
-        "UsageTime 每周使用报告",
+        "PcTime 每周使用报告",
         "=" * 24,
         "",
         f"周期：{_period_line(start, end, summary)}",
@@ -323,7 +278,6 @@ def build_weekly_html(day, summary, user=None):
     """周报的 HTML 正文。"""
     start, end = week_range(day)
     total, app_count = _totals_text(summary)
-    apps, hidden_count, hidden_seconds = _visible_apps(summary, config.MAIL_MAX_APPS)
 
     period_row = (
         f'<div style="color:#5f6368;font-size:13px;margin-top:4px;">'
@@ -335,7 +289,7 @@ def build_weekly_html(day, summary, user=None):
                  f"{html.escape(end.isoformat())} 周报"),
         totals_html=_html_totals(total, app_count),
         extra_html=period_row + _html_device_row(user),
-        rows=_html_app_rows(apps, total, hidden_count, hidden_seconds),
+        rows=[application_chart(summary, start, end)],
     )
 
 

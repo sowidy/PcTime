@@ -114,10 +114,11 @@ def get_range_summary(user_key, start, end):
 
     这是**周报**正文的数据源（周报 = 周日那一封，区间是周一..周日）。
     形状刻意和 get_daily_summary 做成一样（total_seconds / app_count / apps），
-    这样 mail/report.py 里那套行渲染和「另有 N 个应用」折叠原封不动就能用上。
+    这样 mail/report.py 可以共用汇总头部和纯文本明细。
     两处不同：
         * apps 是**跨天聚合**过的（按 app_name 分组求和），不是某一天的；
-        * 多一个 days_with_data：区间里有几天真的有数据。
+        * 多一个 days_with_data：区间里有几天真的有数据；
+        * daily_apps 保留真实每天各应用的时长，用于堆叠柱状图。
     返回 None 表示区间内一行记录都没有 —— 调用方据此跳过（no_data）。
 
     参数：
@@ -151,6 +152,15 @@ def get_range_summary(user_key, start, end):
             )
             apps = cur.fetchall()
 
+            # Genuine daily composition for the weekly stacked chart. Never
+            # distribute the weekly totals evenly across days.
+            cur.execute(
+                "SELECT day, app_name, seconds FROM usage_records "
+                "WHERE user_key = %s AND day BETWEEN %s AND %s ORDER BY day, app_name",
+                (user_key, start, end),
+            )
+            daily_apps = [db_conn.row_to_json(r) for r in cur.fetchall()]
+
     if not apps:
         return None
 
@@ -158,9 +168,8 @@ def get_range_summary(user_key, start, end):
     return {
         "start": start.isoformat(),
         "end": end.isoformat(),
-        # COUNT(DISTINCT day) 不依赖 app_name，分组之后每一行的值都一样，
-        # 所以取第一行就行 —— 省掉再查一次 COUNT(*) 的那次往返。
-        "days_with_data": int(apps[0]["days_with_data"]),
+        "days_with_data": len({str(row["day"]) for row in daily_apps}),
+        "daily_apps": daily_apps,
         "total_seconds": round(total, 1),
         "app_count": len(apps),
         "apps": [

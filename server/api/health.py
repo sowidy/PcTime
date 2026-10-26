@@ -17,7 +17,7 @@ from db import conn as db_conn
 # 拆成一个常量，两边都往下依赖它，环就断了。
 SERVICE_VERSION = "1.0.0"
 
-log = logging.getLogger("usagetime")
+log = logging.getLogger("pctime")
 
 router = APIRouter()
 
@@ -26,7 +26,7 @@ router = APIRouter()
 def index():
     """纯给人看的接口目录，方便用浏览器打开确认服务活着。"""
     return {
-        "service": "usagetime-server",
+        "service": "pctime-server",
         "version": SERVICE_VERSION,
         "endpoints": [
             "GET  /api/v1/health",
@@ -45,6 +45,8 @@ def index():
             "POST /api/v1/app-summary/complete",
             "GET /api/v1/web-usage/{user_key}",
             "GET /api/v1/web-usage-summary/{user_key}",
+            "GET /api/v1/web-hourly/{user_key}",
+            "GET /api/v1/web-intervals/{user_key}",
             "GET /api/v1/app-timeline/{user_key}",
         ],
         "docs": "/docs",

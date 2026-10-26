@@ -21,3 +21,6 @@ pymysql>=1.1,<2
 #     RuntimeError: 'cryptography' package is required for sha256_password
 #     or caching_sha2_password auth methods
 cryptography>=43
+
+# Headless PNG charts embedded in report emails (no Qt / browser required).
+Pillow>=10.1,<13

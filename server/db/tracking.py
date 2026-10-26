@@ -4,6 +4,8 @@ from datetime import datetime
 from db import conn as db_conn
 
 TABLES = {"web": ("website_usage_records", "host,display_name,seconds"),
+          "web_hourly": ("website_hourly_usage", "hour,host,seconds"),
+          "web_intervals": ("website_intervals", "host,start_second,end_second"),
           "timeline": ("app_timeline_bins", "bucket,app_name,seconds")}
 
 
@@ -19,6 +21,14 @@ def replace_day(cur, kind, user_key, day, records, complete=False):
                 "ON DUPLICATE KEY UPDATE complete=VALUES(complete),uploaded_at=VALUES(uploaded_at)",
                 (user_key, day, kind, bool(complete), now))
     return len(rows)
+
+
+def clear_day(cur, kind, user_key, day):
+    """Remove a stale optional snapshot when an older client cannot supply it."""
+    table = TABLES[kind][0]
+    cur.execute(f"DELETE FROM {table} WHERE user_key=%s AND day=%s", (user_key, day))
+    cur.execute("DELETE FROM tracking_uploads WHERE user_key=%s AND day=%s AND kind=%s",
+                (user_key, day, kind))
 
 
 def read_range(kind, user_key, start, end):

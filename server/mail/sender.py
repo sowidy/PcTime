@@ -10,6 +10,7 @@ send_mail()。同模块内的这两次调用写**裸名**（`send_day(...)` / `s
 UNIQUE KEY (user_key, day) 不需要动，详见 mail/__init__.py。
 """
 import logging
+import base64
 # smtplib 必须是模块级 import（而不是 from smtplib import SMTP_SSL）：
 # 测试是拿 mock.patch.object(sender.smtplib, "SMTP_SSL", ...) 顶掉它的，
 # 这就要求本模块里存在一个叫 smtplib 的属性。
@@ -17,6 +18,7 @@ import smtplib
 from datetime import date, datetime, timedelta
 from email.header import Header
 from email.mime.multipart import MIMEMultipart
+from email.mime.image import MIMEImage
 from email.mime.text import MIMEText
 from email.utils import formataddr, formatdate, make_msgid
 
@@ -24,7 +26,7 @@ import config
 from db import mail_log, usage_records, users
 from mail import report
 
-log = logging.getLogger("usagetime.mail.sender")
+log = logging.getLogger("pctime.mail.sender")
 
 
 def send_mail(to, subject, text, html_body):
@@ -44,7 +46,26 @@ def send_mail(to, subject, text, html_body):
     msg["Message-ID"] = make_msgid(domain=domain)
 
     msg.attach(MIMEText(text, "plain", "utf-8"))
-    msg.attach(MIMEText(html_body, "html", "utf-8"))
+    # Data URIs are convenient for local previews, but poorly supported in email.
+    # Convert only generated PNGs to inline CID attachments; no network downloads.
+    from mail.charts import IMAGE_DATA
+    images = []
+    def attach_image(match):
+        cid = make_msgid(domain=domain)[1:-1]
+        image = MIMEImage(base64.b64decode(match.group(1), validate=True), _subtype="png")
+        image.add_header("Content-ID", f"<{cid}>")
+        image.add_header("Content-Disposition", "inline", filename=f"chart-{len(images)+1}.png")
+        images.append(image)
+        return "cid:" + cid
+    html_body = IMAGE_DATA.sub(attach_image, html_body)
+    if images:
+        related = MIMEMultipart("related")
+        related.attach(MIMEText(html_body, "html", "utf-8"))
+        for image in images:
+            related.attach(image)
+        msg.attach(related)
+    else:
+        msg.attach(MIMEText(html_body, "html", "utf-8"))
 
     if config.SMTP_USE_SSL:
         server = smtplib.SMTP_SSL(config.SMTP_HOST, config.SMTP_PORT,timeout=config.SMTP_TIMEOUT)
@@ -113,39 +134,51 @@ def send_day(user_key, day, email=None, dry_run=False, now=None):
         summary = usage_records.get_range_summary(user_key, start, end)
     else:
         summary = usage_records.get_daily_summary(user_key, day)
-    timeline_rows, site_rows, readiness = [], [], []
+    site_rows, site_hours, site_intervals, readiness = [], [], [], []
     if config.MAIL_TRACKING_ENABLED:
         from db import tracking
+        range_start, range_end = report.week_range(day) if weekly else (day, day)
+        unavailable = set()
+        for kind, rows in (("web", site_rows), ("web_hourly", site_hours),
+                           ("web_intervals", site_intervals)):
+            if weekly and kind == "web_intervals":
+                continue
+            try:
+                rows.extend(tracking.read_range(kind, user_key, range_start, range_end))
+            except Exception:
+                unavailable.add(kind)
+                log.warning("报告 %s 数据不可用，继续生成其他报告内容", kind, exc_info=True)
         try:
-            range_start, range_end = report.week_range(day) if weekly else (day, day)
-            timeline_rows = tracking.read_range("timeline", user_key, range_start, range_end)
-            site_rows = tracking.read_range("web", user_key, range_start, range_end)
             readiness = tracking.readiness(user_key, range_start, range_end)
-            if (timeline_rows or site_rows) and not any(
+            readiness = [r for r in readiness if r["kind"] not in unavailable]
+            if site_rows and not any(
                     str(r["day"]) == str(day) and r["kind"] == "apps" and r["complete"] for r in readiness):
                 log.warning("报告应用数据尚未确认日终完成 user=%s day=%s", user_key, day)
         except Exception:
             log.warning("附加报告数据不可用，继续生成原应用报告", exc_info=True)
     app_summary_missing = summary is None
     if summary is None and site_rows:
-        # Never use website/timeline durations as the device total.
-        summary = {"total_seconds": 0, "app_count": 0, "apps": []}
+        # Never use website durations as the device total.
+        summary = {"total_seconds": 0, "app_count": 0, "apps": [], "_app_summary_missing": True}
     if summary is None:
         return {**out, "status": "skipped", "reason": "no_data"}
 
     user = users.get_user(user_key)
+    # Rendering-only fields, no change to upload/API contracts.
+    summary = {**summary, "_readiness": readiness}
     if app_summary_missing:
         subject, text, html_body = report.build_missing_app_message(day, user, weekly)
     elif weekly:
         subject, text, html_body = report.build_weekly_message(day, summary, user)
     else:
         subject, text, html_body = report.build_message(day, summary, user)
-    if timeline_rows or site_rows:
+    if config.MAIL_TRACKING_ENABLED and (weekly or site_rows):
         from mail.tracking_report import append_sections
         try:
             subject, text, html_body = append_sections(
-                (subject, text, html_body), summary, timeline_rows, site_rows,
-                range_start, range_end, readiness)
+                (subject, text, html_body), summary, [], site_rows,
+                range_start, range_end, readiness, site_hours=site_hours,
+                site_intervals=site_intervals)
         except Exception:
             log.warning("附加报告渲染失败，继续发送应用报告", exc_info=True)
     out["subject"] = subject

@@ -44,15 +44,68 @@ class SiteUsage(StrictModel):
         return name + (f":{port}" if port else "")
 
 
+class SiteHour(StrictModel):
+    hour: int = Field(ge=0, le=23, strict=True)
+    host: str = Field(min_length=1, max_length=300)
+    seconds: float = Field(gt=0, le=3600)
+
+    @field_validator("host")
+    @classmethod
+    def host_only(cls, value):
+        return SiteUsage.host_only(value)
+
+
+class SiteInterval(StrictModel):
+    host: str = Field(min_length=1, max_length=300)
+    start_second: float = Field(ge=0, lt=86400)
+    end_second: float = Field(gt=0, le=86400)
+
+    @field_validator("host")
+    @classmethod
+    def host_only(cls, value):
+        return SiteUsage.host_only(value)
+
+    @model_validator(mode="after")
+    def valid_range(self):
+        if self.end_second <= self.start_second:
+            raise ValueError("interval end must follow start")
+        return self
+
+
 class SiteDay(StrictModel):
     day: date
     sites: list[SiteUsage] = Field(max_length=1000)
+    hourly: list[SiteHour] | None = Field(default=None, max_length=1000)
+    intervals: list[SiteInterval] | None = Field(default=None, max_length=3000)
     complete: bool = False
 
     @model_validator(mode="after")
     def validate_total(self):
         if len({s.host for s in self.sites}) != len(self.sites) or sum(s.seconds for s in self.sites) > 86700:
             raise ValueError("duplicate host or invalid total")
+        if self.hourly is not None:
+            by_host = defaultdict(float)
+            seen = set()
+            for hour in self.hourly:
+                key = (hour.hour, hour.host)
+                if key in seen:
+                    raise ValueError("duplicate host/hour")
+                seen.add(key)
+                by_host[hour.host] += hour.seconds
+            expected = {s.host: s.seconds for s in self.sites if s.seconds > 0}
+            if set(by_host) != set(expected) or any(
+                    abs(by_host[host] - seconds) > max(2, seconds * .001)
+                    for host, seconds in expected.items()):
+                raise ValueError("hourly website usage must match daily totals")
+        if self.intervals is not None:
+            by_host = defaultdict(float)
+            for interval in self.intervals:
+                by_host[interval.host] += interval.end_second - interval.start_second
+            expected = {s.host: s.seconds for s in self.sites if s.seconds > 0}
+            if set(by_host) != set(expected) or any(
+                    abs(by_host[host] - seconds) > max(2, seconds * .001)
+                    for host, seconds in expected.items()):
+                raise ValueError("website intervals must match daily totals")
         return self
 
 

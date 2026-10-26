@@ -20,7 +20,8 @@ import config
 # schema.sql 和本文件在同一个目录（server/db/），跟着服务端一起部署
 _SCHEMA_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "schema.sql")
 REQUIRED_TABLES = frozenset(("users", "usage_records", "mail_log", "device_tokens",
-                             "website_usage_records", "app_timeline_bins", "tracking_uploads"))
+                             "website_usage_records", "website_hourly_usage", "website_intervals",
+                             "app_timeline_bins", "tracking_uploads"))
 
 
 # ── 连接 ──────────────────────────────────────────────────────
@@ -168,7 +169,7 @@ def check_schema():
             found = {row["TABLE_NAME"] for row in cur.fetchall()}
     missing = REQUIRED_TABLES - found
     if missing:
-        raise RuntimeError("数据库缺少表：%s；请用建表账号设置 USAGETIME_DB_INIT_SCHEMA=1 初始化"
+        raise RuntimeError("数据库缺少表：%s；请用建表账号设置 PCTIME_DB_INIT_SCHEMA=1 初始化"
                            % ", ".join(sorted(missing)))
 
 

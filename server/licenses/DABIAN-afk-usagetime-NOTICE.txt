@@ -1,0 +1,29 @@
+Project: DABIAN-afk/usagetime
+URL: https://github.com/DABIAN-afk/usagetime
+Reviewed revision: 0928decb6a576c0276bbd001cf8c615553109fb1
+Reviewed on: 2026-10-25
+README Git blob: 9cde60cb7ed45164174a2a918c4a48040d89e26d
+Evidence: https://github.com/DABIAN-afk/usagetime/blob/0928decb6a576c0276bbd001cf8c615553109fb1/README.md
+
+Verbatim license declaration in the upstream README:
+
+## License
+
+MIT
+
+PcTime's desktop client is derived from this project, including its local
+application tracking, storage, UI, tray and packaging foundation. Existing
+author attribution and any subsequently identified file-level notices must
+be retained. The PcTime copyright notice applies to PcTime contributions and
+does not transfer ownership of the upstream work.
+
+At this revision, no standalone LICENSE, LICENSE.txt, LICENSE.md or lowercase
+license file was found. No upstream copyright year or holder notice was
+found in the reviewed declaration. This document records the available
+evidence; it is not an upstream-issued license text or permission letter.
+
+The repository's MIT LICENSE supplies the standard MIT terms for PcTime
+contributions. It cannot cure missing authorization for upstream code or
+artwork. Before relying on a fully documented upstream grant for a public
+binary release, obtain the upstream copyright/license notice or explicit
+confirmation from the relevant rightsholder. No confirmation is claimed here.

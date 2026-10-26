@@ -76,7 +76,13 @@ def contracts(base):
     apps = {**meta, "days": [{"day": day, "apps": [
         {"app_name": "editor.exe", "display_name": "Editor", "seconds": 1800, "launches": 1}]}]}
     web = {**meta, "days": [{"day": day, "complete": True,
-                            "sites": [{"host": "EXAMPLE.COM", "seconds": 900}]}]}
+                            "sites": [{"host": "EXAMPLE.COM", "seconds": 900}],
+                            "hourly": [{"hour": 9, "host": "EXAMPLE.COM", "seconds": 600},
+                                       {"hour": 10, "host": "EXAMPLE.COM", "seconds": 300}],
+                            "intervals": [{"host": "EXAMPLE.COM", "start_second": 9 * 3600,
+                                           "end_second": 9 * 3600 + 600},
+                                          {"host": "EXAMPLE.COM", "start_second": 10 * 3600,
+                                           "end_second": 10 * 3600 + 300}]}]}
     timeline = {**meta, "days": [{"day": day, "complete": True, "bins": [
         {"bucket": 36, "app_name": "editor.exe", "seconds": 900},
         {"bucket": 37, "app_name": "editor.exe", "seconds": 900}]}]}
@@ -89,10 +95,14 @@ def contracts(base):
     assert result["total_seconds"] == 1800 and result["app_count"] == 1, result
     rows = http(base, f"/api/v1/web-usage/{key}?start={day}&end={day}", token=token)["records"]
     assert len(rows) == 1 and rows[0]["seconds"] == 900 and rows[0]["host"] == "example.com"
+    hours = http(base, f"/api/v1/web-hourly/{key}?start={day}&end={day}", token=token)["records"]
+    assert len(hours) == 2 and sum(r["seconds"] for r in hours) == 900, hours
+    intervals = http(base, f"/api/v1/web-intervals/{key}?start={day}&end={day}", token=token)["records"]
+    assert len(intervals) == 2 and sum(r["end_second"]-r["start_second"] for r in intervals) == 900
     post("/app-summary/complete", {**meta, "days": [{"day": day, "seconds": 1800}]})
     state = http(base, f"/api/v1/app-timeline/{key}?start={day}&end={day}", token=token)
     assert sum(r["seconds"] for r in state["records"]) == 1800
-    assert {r["kind"] for r in state["readiness"] if r["complete"]} == {"apps", "web", "timeline"}
+    assert {r["kind"] for r in state["readiness"] if r["complete"]} == {"apps", "web", "web_hourly", "web_intervals", "timeline"}
     post("/upload", apps, auth="")
     state = http(base, f"/api/v1/app-timeline/{key}?start={day}&end={day}", token=token)
     assert not next(r["complete"] for r in state["readiness"] if r["kind"] == "apps")
@@ -107,6 +117,8 @@ def main():
     if not args.mysqld:
         parser.error("Pass --mysqld /path/to/mysqld")
     client_path = args.client.resolve() if args.client else None
+    if client_path and not (client_path / "tools/verify_sync.py").is_file():
+        parser.error("--client must contain tools/verify_sync.py; omit --client for a server-only checkout")
     with tempfile.TemporaryDirectory(prefix="pctime-standalone-") as temp:
         root = Path(temp)
         isolated = root / "server"
@@ -118,12 +130,13 @@ def main():
                 "dist", "build", "data", ".env*", "__pycache__", ".venv", "*.log", "*.db*"))
             client_path = client_copy
         # A copy containing server/ alone proves there are no sibling-code imports.
-        env = {k: v for k, v in os.environ.items() if not k.startswith("USAGETIME_") and k != "PYTHONPATH"}
+        env = {k: v for k, v in os.environ.items()
+               if not k.startswith(("PCTIME_", "USAGETIME_")) and k != "PYTHONPATH"}
         db_port, api_port = free_port(), free_port()
-        env.update(USAGETIME_DB_HOST="127.0.0.1", USAGETIME_DB_PORT=str(db_port),
-                   USAGETIME_DB_USER="root", USAGETIME_DB_PASSWORD="", USAGETIME_DB_INIT_SCHEMA="1",
-                   USAGETIME_MAIL_ENABLED="0", USAGETIME_MAIL_SCHEDULER="0",
-                   USAGETIME_HOST="127.0.0.1", USAGETIME_PORT=str(api_port), PYTHONUTF8="1")
+        env.update(PCTIME_DB_HOST="127.0.0.1", PCTIME_DB_PORT=str(db_port),
+                   PCTIME_DB_USER="root", PCTIME_DB_PASSWORD="", PCTIME_DB_INIT_SCHEMA="1",
+                   PCTIME_MAIL_ENABLED="0", PCTIME_MAIL_SCHEDULER="0",
+                   PCTIME_HOST="127.0.0.1", PCTIME_PORT=str(api_port), PYTHONUTF8="1")
         check = subprocess.run([sys.executable, str(isolated / "check.py")], cwd=root,
                                env=env, capture_output=True, text=True, encoding="utf-8", timeout=30)
         assert check.returncode == 0, check.stderr
@@ -162,7 +175,7 @@ def main():
                                 user_ddl = user_ddl[user_ddl.index("CREATE TABLE"):].split(";")[0]
                                 cur.execute("USE " + database)
                                 cur.execute(user_ddl.replace("utf8mb4_unicode_ci", "utf8mb4_general_ci"))
-                        env["USAGETIME_DB_NAME"] = database
+                        env["PCTIME_DB_NAME"] = database
                         base = f"http://127.0.0.1:{api_port}"
                         api_log = root / (name + ".log")
                         with api_log.open("wb") as api_out:
@@ -191,8 +204,8 @@ def main():
                             username = "verify_" + name
                             cur.execute(f"CREATE USER '{username}'@'127.0.0.1' IDENTIFIED BY 'temporary-test'")
                             cur.execute(f"GRANT SELECT,INSERT,UPDATE,DELETE ON {database}.* TO '{username}'@'127.0.0.1'")
-                        runtime = dict(env, USAGETIME_DB_USER=username, USAGETIME_DB_PASSWORD="temporary-test",
-                                       USAGETIME_DB_INIT_SCHEMA="0")
+                        runtime = dict(env, PCTIME_DB_USER=username, PCTIME_DB_PASSWORD="temporary-test",
+                                       PCTIME_DB_INIT_SCHEMA="0")
                         result = subprocess.run([sys.executable, str(isolated / "check.py"), "--database"],
                                                 cwd=root, env=runtime, capture_output=True, text=True,
                                                 encoding="utf-8", timeout=30)

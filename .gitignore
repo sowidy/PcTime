@@ -1,50 +1,75 @@
-# Python
+# 发布到 GitHub：client/、server/、tests/ 源码与测试，扩展源码，
+# README、部署说明、许可证、.env.example，以及 server/docs/images/ 示例图。
+# 只排除下面的本地数据、凭据和构建产物；不要使用 *.md / *.png 等全局规则。
+
+# Python / test caches
 __pycache__/
 *.py[cod]
-*.pyo
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+.coverage.*
+htmlcov/
+*.egg-info/
 
-# 本地配置：明文装着数据库密码 / 邮箱授权码，绝不能被 add 进来。
-# 模板是 server/.env.example（那个是给人看的，没有真值，要提交）。
+# Virtual environments and dependency installs
+.venv/
+venv/
+node_modules/
+
+# Real configuration and credentials. Keep example templates publishable.
 .env
-.env.local
+.env.*
+!.env.example
+*.pem
+*.p12
+*.pfx
+*.ppk
+*.key
+*.keystore
+id_rsa
+id_ed25519
 
-# Build
-client/build/
-client/dist/
-client/app.ico
-*.spec.bak
-
-# Database (local data)
+# Local databases, exports and logs
 *.db
 *.db-shm
 *.db-wal
+*.db-journal
+*.sqlite
+*.sqlite3
+*.sqlite-shm
+*.sqlite-wal
+*.log
+/client/data/
+/server/data/
 
-# 自动导出的 CSV（由数据库生成，属于派生数据）
-client/
-client/usage.db
-client/.env
+# Generated executables, packages and previews
+build/
+dist/
+/app.ico
+/client/app.ico
+*.spec.bak
+/artifacts/
 
-server/.env
+# Local-only release/verification helpers. Runtime helpers inside client/ and
+# server/ stay publishable. GitHub Actions were removed at the user's request.
+/tools/
+/.github/
 
-# IDE
+# Working drafts; the maintained public instructions live in README files.
+/WEBSITE_TRACKING_PLAN.md
+/TRACKING_SETUP.md
+/TRACKING_VERIFICATION.md
+/BROWSER_EXTENSION_RELEASE.md
+/BROWSER_EXTENSION_PRIVACY.md
+
+# IDE / operating system
 .vscode/
 .idea/
+.vs/
 *.swp
-
-# OS
+*.swo
+.DS_Store
 Thumbs.db
 Desktop.ini
-
-.venv/
-client/*.log
-client/.pytest_cache/
-tests/.pytest_cache/
-app.ico
-artifacts/
-
-# Keep both independently deployable components and their READMEs in Git.
-# Local planning/verification notes are not deployment documentation.
-*.md
-# Local verification, preview and release helper scripts; neither client nor server imports these.
-/tools/
-tests/

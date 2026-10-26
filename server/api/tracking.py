@@ -80,6 +80,17 @@ def upload_dataset(kind, req, authorization):
                     rows = day.sites if kind == "web" else day.bins
                     count += store.replace_day(cur, kind, str(req.user_key), day.day,
                                                [r.model_dump() for r in rows], day.complete)
+                    if kind == "web":
+                        if day.hourly is None:
+                            store.clear_day(cur, "web_hourly", str(req.user_key), day.day)
+                        else:
+                            count += store.replace_day(cur, "web_hourly", str(req.user_key), day.day,
+                                                       [r.model_dump() for r in day.hourly], day.complete)
+                        if day.intervals is None:
+                            store.clear_day(cur, "web_intervals", str(req.user_key), day.day)
+                        else:
+                            count += store.replace_day(cur, "web_intervals", str(req.user_key), day.day,
+                                                       [r.model_dump() for r in day.intervals], day.complete)
     except pymysql.MySQLError:
         raise HTTPException(503, "写入失败，请稍后重试")
     return {"ok": True, "days_written": len(req.days), "rows_written": count}
@@ -138,6 +149,24 @@ def web_summary(user_key: UUID, day: date | None = None, authorization: str = He
     day = day or date.today()
     records = store.read_range("web", str(user_key), day, day)
     return {"day": str(day), "total_seconds": sum(r["seconds"] for r in records), "sites": records}
+
+
+@router.get("/api/v1/web-hourly/{user_key}")
+def read_web_hourly(user_key: UUID, start: date | None = None, end: date | None = None,
+                    authorization: str = Header(default="")):
+    authenticate(user_key, authorization)
+    start, end = checked_range(start, end)
+    return {"records": store.read_range("web_hourly", str(user_key), start, end),
+            "readiness": store.readiness(str(user_key), start, end)}
+
+
+@router.get("/api/v1/web-intervals/{user_key}")
+def read_web_intervals(user_key: UUID, start: date | None = None, end: date | None = None,
+                       authorization: str = Header(default="")):
+    authenticate(user_key, authorization)
+    start, end = checked_range(start, end)
+    return {"records": store.read_range("web_intervals", str(user_key), start, end),
+            "readiness": store.readiness(str(user_key), start, end)}
 
 
 @router.get("/api/v1/app-timeline/{user_key}")

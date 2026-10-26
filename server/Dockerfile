@@ -6,7 +6,7 @@ WORKDIR /app
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 COPY . .
-RUN python check.py && useradd --system --uid 10001 usagetime
-USER usagetime
+RUN python check.py && useradd --system --uid 10001 pctime
+USER pctime
 EXPOSE 8000
 CMD ["python", "run.py"]

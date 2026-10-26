@@ -1,0 +1,24 @@
+License-text provenance, reviewed 2026-10-25
+
+Tai-MIT.txt
+  https://github.com/Planshit/Tai/blob/566062dace9591990be9b94190b0f86c34497905/LICENSE
+  Git blob: 524c571a8cee58e7a6adaf75eef70c5bdb999481
+  Preserved verbatim, including Copyright (c) 2022 Plan shit.
+
+DABIAN-afk-usagetime-NOTICE.txt
+  https://github.com/DABIAN-afk/usagetime/blob/0928decb6a576c0276bbd001cf8c615553109fb1/README.md
+  README Git blob: 9cde60cb7ed45164174a2a918c4a48040d89e26d
+  PcTime's evidence record, not a claimed upstream-issued full license.
+
+LGPL-3.0-only.txt and GPL-3.0-only.txt
+  https://github.com/pyside/pyside-setup/blob/dev/LICENSES/LGPL-3.0-only.txt
+  Git blob: 65c5ca88a67c30becee01c5a8816d964b03862f9
+  https://github.com/pyside/pyside-setup/blob/dev/LICENSES/GPL-3.0-only.txt
+  Git blob: 94a9ed024d3859793618152ea559a168bbcbb5e2
+  License texts only; these are not the corresponding Qt/PySide library sources.
+
+dependencies/ and DEPENDENCIES.json in generated packages
+  Copied from the installed distributions used by that build. Versions and
+  relative license paths are recorded by tools/collect_licenses.py.
+  This collection does not imply that all bundled native-library or source
+  availability obligations have been audited or fulfilled.
