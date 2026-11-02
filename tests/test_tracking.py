@@ -248,7 +248,7 @@ class TrackingMailTests(unittest.TestCase):
         text, body = tracking_report.render(summary, bins, [{"host": "example.com", "seconds": 500}], day, day)
         self.assertNotIn("<script>", body)
         self.assertNotIn("应用时间线", body)
-        self.assertIn("网站浏览明细", text)
+        self.assertIn("网站：", text)
         self.assertEqual(summary["total_seconds"], 1800)
         self.assertLess(len(body.encode()), 80000)
 
@@ -269,7 +269,7 @@ class TrackingMailTests(unittest.TestCase):
         summary = {"total_seconds": 0, "app_count": 0, "apps": []}
         message = tracking_report.append_sections(report.build_message(day, summary), summary, [],
                     [{"day": str(day), "host": "example.com", "seconds": 30}], day, day)
-        self.assertLess(message[2].index("网站浏览明细"), message[2].index(report.FOOTER_TEXT[:12]))
+        self.assertLess(message[2].index("网站："), message[2].index(report.FOOTER_TEXT[:12]))
 
     def test_missing_application_summary_is_not_presented_as_zero(self):
         from mail import report
@@ -282,6 +282,6 @@ class TrackingMailTests(unittest.TestCase):
         bins = [{"day": str(start + timedelta(days=i)), "bucket": 36,
                  "app_name": "a.exe", "seconds": 900} for i in (0, 2)]
         text, body = tracking_report.render({"total_seconds": 1800, "apps": []}, bins, [], start, start + timedelta(days=6))
-        self.assertIn("本周尚未收到网站记录", text)
+        self.assertIn("本周未收到网站记录", text)
         self.assertNotIn("应用时间线", text + body)
         self.assertNotIn('data-timeline="itinerary"', body)

@@ -379,7 +379,7 @@ class BrowserSettingsPanel(QWidget):
                 ("web_tracking_enabled", "启用本地网站统计", "扩展自动连接，仅统计前台、非隐身网页。"),
                 ("web_export_enabled", "自动导出网站 CSV", "按日、周、月保存独立的网站汇总文件。"),
                 ("web_upload_enabled", "邮件中加入网站图表", "允许上传域名汇总、分时用量和起止时段；可立即上传，或开启自动上传。"),
-                ("timeline_upload_enabled", "邮件中加入软件时段图", "允许上传软件的真实使用起止时段及 15 分钟汇总，不含窗口标题。")):
+                ("timeline_upload_enabled", "邮件中加入软件使用图", "允许上传真实使用起止时段及 15 分钟汇总，用于日报时段图与周报热力图；不含窗口标题。")):
             row = QVBoxLayout()
             row.setSpacing(2)
             checkbox = QCheckBox(title)

@@ -25,7 +25,7 @@ import config
 # `mail_log.was_mail_sent`，所以要 patch `db.mail_log` 上的那个名字，
 # patch 包 `db` 是没用的（包上根本没有这个名字，会直接 AttributeError）。
 from db import mail_log, usage_records, users
-from mail import report, scheduler, sender
+from mail import report, scheduler, sender, tracking_report
 
 TODAY = date.today()
 YESTERDAY = TODAY - timedelta(days=1)
@@ -154,14 +154,22 @@ class TestBuildMessage(unittest.TestCase):
         self.assertNotIn("设备：", report.build_text(TODAY, make_summary()))
 
     def test_long_list_is_folded(self):
+        summary = make_summary()
+        starts = (0, 9000, 12900)
+        intervals = [{"day": str(TODAY), "app_name": app["app_name"],
+                      "start_second": start, "end_second": start + app["seconds"]}
+                     for app, start in zip(summary["apps"], starts)]
         with mock.patch.object(config, "MAIL_MAX_APPS", 2):
-            text = report.build_text(TODAY, make_summary())
-            html_body = report.build_html(TODAY, make_summary())
-        for body in (text, html_body):
-            self.assertIn("PyCharm", body)
-            self.assertNotIn("wechat.exe", body)      # 第 3 个被折叠了
-            self.assertIn("另有 1 个应用" if body is text else "其他（1 个应用）", body)
-            self.assertIn("10 分", body)              # 被折叠的 600 秒
+            text = report.build_text(TODAY, summary)
+            html_body = tracking_report.append_sections(report.build_message(TODAY, summary),
+                summary, [], [], TODAY, TODAY, app_intervals=intervals)[2]
+        self.assertIn("PyCharm", text)
+        self.assertNotIn("wechat.exe", text)
+        self.assertIn("另有 1 个应用", text)
+        self.assertIn("PyCharm", html_body)
+        self.assertNotIn("wechat.exe", html_body)
+        self.assertIn("另有 1 个软件", html_body)
+        self.assertIn("10 分", html_body)
 
     def test_html_escapes_app_names(self):
         # 应用名来自客户端上报，是外部输入。不转义的话，一个叫
@@ -172,7 +180,10 @@ class TestBuildMessage(unittest.TestCase):
                       "display_name": '<script>alert("x")</script>',
                       "seconds": 60.0, "launches": 1}],
         }
-        html_body = report.build_html(TODAY, evil)
+        html_body = tracking_report.append_sections(report.build_message(TODAY, evil),
+            evil, [], [], TODAY, TODAY,
+            app_intervals=[{"day": str(TODAY), "app_name": "x.exe",
+                            "start_second": 0, "end_second": 60}])[2]
         self.assertNotIn("<script>", html_body)
         self.assertIn("&lt;script&gt;", html_body)
 
@@ -776,11 +787,11 @@ class TestBuildWeeklyMessage(unittest.TestCase):
 
         self.assertIn("<!DOCTYPE html>", body)
         self.assertIn("2026-10-12 ~ 2026-10-18 周报", body)
-        self.assertIn("有数据 5 天", body)
+        self.assertIn("有数据 5/7 天", body)
         self.assertIn("DESKTOP-ABC", body)
         self.assertIn("PyCharm", body)
-        # 页脚在 HTML 里是转义过的（原文含 <你的设备ID>），所以断前半截
-        self.assertIn("本邮件由 PcTime 服务端自动发送", body)
+        # 页脚在 HTML 里是转义过的（原文含 <设备ID>）。
+        self.assertIn("PcTime 自动报告", body)
 
     def test_long_weekly_ranking_is_folded(self):
         with mock.patch.object(config, "MAIL_MAX_APPS", 2):
@@ -790,11 +801,10 @@ class TestBuildWeeklyMessage(unittest.TestCase):
         for rendered in (text, body):
             self.assertIn("PyCharm", rendered)
             self.assertNotIn("wechat.exe", rendered)
-            self.assertIn("另有 1 个应用", rendered)
-            self.assertIn("20 分", rendered)       # 被折叠掉的 1200 秒
-            # 折叠只影响「列出几行」，不影响总数。HTML 版「总计 …，共」和
-            # 「3 个应用」中间夹着换行缩进，所以这里断的是后半截
+            self.assertIn("20 分", rendered)
             self.assertIn("3 个应用", rendered)
+        self.assertIn("另有 1 个应用", text)
+        self.assertIn("其他（1 应用）", body)
 
     def test_html_escapes_app_names_and_hostname(self):
         summary = make_week_summary()
@@ -819,7 +829,7 @@ class TestBuildWeeklyMessage(unittest.TestCase):
 
         self.assertIn("0.0%", text)
         # HTML is now a stacked chart, not a percentage/ranking table.
-        self.assertIn("Week：0 秒", body)
+        self.assertIn("总计 <strong>0 秒</strong>", body)
         self.assertIn("data:image/png;base64,", body)
         self.assertIn("0 秒", text)
 

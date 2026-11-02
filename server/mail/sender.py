@@ -134,17 +134,19 @@ def send_day(user_key, day, email=None, dry_run=False, now=None):
         summary = usage_records.get_range_summary(user_key, start, end)
     else:
         summary = usage_records.get_daily_summary(user_key, day)
-    site_rows, site_hours, site_intervals, app_intervals, readiness = [], [], [], [], []
+    site_rows, site_hours, site_intervals, app_intervals, timeline_rows, readiness = [], [], [], [], [], []
     if config.MAIL_TRACKING_ENABLED:
         from db import tracking
         range_start, range_end = report.week_range(day) if weekly else (day, day)
         unavailable = set()
         for kind, rows in (("web", site_rows), ("web_hourly", site_hours),
                            ("web_intervals", site_intervals),
-                           ("app_intervals", app_intervals)):
+                           ("app_intervals", app_intervals), ("timeline", timeline_rows)):
             if weekly and kind == "web_intervals":
                 continue
             if weekly and kind == "app_intervals":
+                continue
+            if not weekly and kind == "timeline":
                 continue
             try:
                 rows.extend(tracking.read_range(kind, user_key, range_start, range_end))
@@ -179,7 +181,7 @@ def send_day(user_key, day, email=None, dry_run=False, now=None):
         from mail.tracking_report import append_sections
         try:
             subject, text, html_body = append_sections(
-                (subject, text, html_body), summary, [], site_rows,
+                (subject, text, html_body), summary, timeline_rows, site_rows,
                 range_start, range_end, readiness, site_hours=site_hours,
                 site_intervals=site_intervals, app_intervals=app_intervals)
         except Exception:

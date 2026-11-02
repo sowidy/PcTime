@@ -6,8 +6,8 @@
       正文是按应用**跨天聚合**过的（数据源不同：日报用 get_daily_summary，
       周报用 get_range_summary，见 db/usage_records.py）。
 
-两者共用纯文本明细和 HTML 外壳；HTML 使用 charts 模块生成柔色堆叠柱与折线，
-不再输出排行表。周报按真实每日应用汇总绘图，日报可用时间线按小时绘图。
+两者共用纯文本明细和 HTML 外壳；周报使用柔色堆叠柱与折线，
+日报的软件使用时段和时长图由 tracking_report 根据真实起止记录追加。
 
 **哪天发周报不在这里决定** —— 本模块只管「给定区间和汇总怎么渲染」，
 「周日发周报」那条策略在 mail/sender.py。这样这个模块保持纯计算。
@@ -22,8 +22,7 @@ import config
 from mail.charts import application_chart
 
 FOOTER_TEXT = (
-    "本邮件由 PcTime 服务端自动发送。想停掉它，可以让服务端不再配置 "
-    "SMTP，或者调用 POST /api/v1/subscription/<你的设备ID> 退订。"
+    "PcTime 自动报告。退订：POST /api/v1/subscription/<设备ID>。"
 )
 
 
@@ -216,7 +215,7 @@ def build_html(day, summary, user=None):
         heading=f"{html.escape(day.isoformat())} 使用报告",
         totals_html=_html_totals(total, app_count),
         extra_html=_html_device_row(user),
-        rows=[application_chart(summary, day, day)],
+        rows=[],
     )
 
 
@@ -279,10 +278,11 @@ def build_weekly_html(day, summary, user=None):
     start, end = week_range(day)
     total, app_count = _totals_text(summary)
 
-    period_row = (
-        f'<div style="color:#5f6368;font-size:13px;margin-top:4px;">'
-        f'周期：{html.escape(_period_line(start, end, summary))}</div>'
-    )
+    span = (end - start).days + 1
+    days_with_data = summary.get("days_with_data")
+    period_row = (f'<div style="color:#5f6368;font-size:13px;margin-top:4px;">'
+                  f'有数据 {int(days_with_data)}/{span} 天</div>'
+                  if days_with_data is not None and int(days_with_data) < span else "")
 
     return _html_shell(
         heading=(f"{html.escape(start.isoformat())} ~ "

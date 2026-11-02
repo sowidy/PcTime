@@ -3,7 +3,9 @@ from collections import defaultdict
 from datetime import timedelta
 import html
 import config
-from mail.charts import application_gantt_chart, website_chart, website_gantt_chart, html_size
+from mail.charts import (application_gantt_chart, weekly_application_heatmap,
+                         website_chart, website_gantt_chart, html_size)
+from mail.site_names import names_for_hosts
 
 
 def _site_text(sites, text):
@@ -12,9 +14,10 @@ def _site_text(sites, text):
     ordered = sorted(sites.items(), key=lambda item: -item[1])
     shown = ordered[:config.MAIL_MAX_SITES] if config.MAIL_MAX_SITES > 0 else ordered
     total = sum(sites.values())
+    labels = names_for_hosts(host for host, _ in ordered)
     for host, seconds in shown:
         share = 100 * seconds / total if total else 0
-        text.append(f"{host}: {format_duration(seconds)} ({share:.1f}%)")
+        text.append(f"{labels[host]}: {format_duration(seconds)} ({share:.1f}%)")
     if len(ordered) > len(shown):
         text.append(f"另有 {len(ordered)-len(shown)} 个网站未逐项列出，总时长仍包含这些网站。")
 
@@ -33,15 +36,16 @@ def render(summary, timeline_rows, site_rows, start, end, readiness=(), site_hou
     text, markup = [], []
     if not weekly and summary.get("apps"):
         markup.append(application_gantt_chart(summary, app_intervals, start))
+    elif weekly and summary.get("apps"):
+        markup.append(weekly_application_heatmap(summary, timeline_rows, start, end, readiness))
     sites = defaultdict(float)
     for row in site_rows:
         sites[row["host"]] += float(row["seconds"])
     if sites:
         title = "一周网站使用时长" if weekly else "网站浏览明细"
-        line = f"网站浏览明细：{format_duration(sum(sites.values()))} · {len(sites)} 个网站（已包含在浏览器应用时长中，不再加入总计）"
+        line = f"网站：{format_duration(sum(sites.values()))} · {len(sites)} 个（已计入浏览器用时）"
         text.extend(["", title, line])
-        markup.append(f'<h2 style="font-size:18px;color:#334e68;margin-top:28px">{title}</h2>'
-                      f'<p style="font-size:13px">{html.escape(line)}</p>')
+        markup.append(f'<p style="font-size:13px;color:#64748b;margin:20px 0 4px">{html.escape(line)}</p>')
         _site_text(sites, text)
         if not weekly:
             markup.append(website_gantt_chart(site_rows, site_intervals, start))
@@ -54,16 +58,15 @@ def render(summary, timeline_rows, site_rows, start, end, readiness=(), site_hou
                 text.append(f"{day} 网站: {value}")
     elif weekly:
         title = "一周网站使用时长"
-        note = ("本周已完成网站上传，没有记录到网站浏览。" if all((str(d), "web") in complete for d in days) else
-                "本周尚未收到网站记录。请在客户端启用网站统计、连接浏览器扩展，开启“邮件中加入网站图表”，"
-                "并确认已手动上传或开启自动上传，服务端连接可用。")
+        note = ("本周无网站使用记录。" if all((str(d), "web") in complete for d in days) else
+                "本周未收到网站记录。请检查客户端网站统计和上传设置。")
         text.extend(["", title, note])
         markup.append(f'<h2 style="font-size:18px;color:#334e68;margin-top:28px">{title}</h2>'
                       f'<p style="font-size:13px;color:#64748b">{note}</p>')
     if site_rows:
         kinds = ("apps", "web")
         if any((str(day), kind) not in complete for day in days for kind in kinds):
-            note = "部分日期未确认日终上传完成，按最后收到的数据展示；未收到不等于未使用。"
+            note = "部分日期未确认上传；留空不代表未使用。"
             text.append(note)
             markup.append(f'<p style="color:#946432;font-size:12px">{note}</p>')
     return "\n".join(text), "".join(markup)
@@ -79,7 +82,9 @@ def append_sections(message, summary, timeline_rows, site_rows, start, end,
     if html_size(body + extra_html) > 80000:
         # Keep website charts when a long site list exceeds the HTML budget.
         extra_html = ((application_gantt_chart(summary, app_intervals, start)
-                       if start == end and summary.get("apps") else "") +
+                       if start == end and summary.get("apps") else
+                       weekly_application_heatmap(summary, timeline_rows, start, end, readiness)
+                       if start != end and summary.get("apps") else "") +
                       (website_gantt_chart(site_rows, site_intervals, start) if start == end and site_rows else "") +
                       (website_chart(site_rows, start, end, readiness, site_hours) if site_rows else ""))
     if html_size(body + extra_html) <= 80000:

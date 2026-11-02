@@ -17,10 +17,25 @@ import config
 from mail.colors import color_map
 from mail import chart_theme as theme
 from mail.site_categories import CATEGORIES, totals as category_totals
+from mail.site_names import names_for_rows as site_names_for_rows
 
 IMAGE_DATA = re.compile(r'data:image/png;base64,([A-Za-z0-9+/=]+)')
 OTHER = "\x00other"
 LINE = theme.LINE
+# Muted, medium-depth category colors for stacked bars only. Cool and warm
+# neighbors remain distinct without the neon effect of fully saturated hues.
+STACK_PALETTE = ("#5D7FB0", "#D18B56", "#589C7B", "#9C78AF",
+                 "#CB6F75", "#4C9DAD", "#B79A4B", "#7089AE",
+                 "#C07D9E", "#7C9E59", "#B87C64", "#678DA5")
+# The reference pie uses separated, flat slices. These tones keep that look
+# legible on the report's white background instead of copying its black canvas.
+PIE_PALETTE = ("#6FA8E8", "#E9BA50", "#48B9A9", "#A88BDC",
+               "#D4869D", "#72AEC4", "#9AA8BA")
+
+
+def stack_color_map(keys):
+    return {key: theme.OTHER if key == OTHER else STACK_PALETTE[index % len(STACK_PALETTE)]
+            for index, key in enumerate(keys)}
 
 
 def html_size(body):
@@ -44,7 +59,7 @@ def prepare(labels, buckets, observed, limit=8):
                        ([sum(max(0, float(bucket.get(key, 0))) for key in hidden)] if hidden else []))
                       if present else None)
     return {"labels": labels, "series": series, "values": values, "totals": totals,
-            "hidden": hidden, "colors": color_map(series)}
+            "hidden": hidden, "colors": stack_color_map(series)}
 
 
 def smooth_line(points, steps=16):
@@ -93,7 +108,7 @@ def line_runs(points):
     return runs
 
 
-def _bar_segment(image, box, color, rounded=False):
+def _bar_segment(image, box, color, rounded=False, separator=False):
     """Subtle vertical color lift and rounded top cap; heights remain exact."""
     x0, y0, x1, y1 = box
     width, height = x1-x0, y1-y0
@@ -103,9 +118,11 @@ def _bar_segment(image, box, color, rounded=False):
     brush = ImageDraw.Draw(piece)
     base = [int(color[i:i+2], 16) for i in (1, 3, 5)]
     for row in range(height):
-        lift = .16*(1-row/max(1, height-1))
+        lift = .10*(1-row/max(1, height-1))
         fill = tuple(round(value+(255-value)*lift) for value in base)
         brush.line((0, row, width, row), fill=fill)
+    if separator and height >= 5:
+        brush.line((0, 0, width - 1, 0), fill=theme.BACKGROUND, width=2)
     mask = Image.new("L", (width, height), 255)
     if rounded:
         mask.paste(0, (0, 0, width, height))
@@ -116,12 +133,13 @@ def _bar_segment(image, box, color, rounded=False):
     image.paste(piece, (x0, y0), mask)
 
 
-def png(model, show_line=True):
+def png(model, show_line=True, show_totals=False):
     """Render at 2x email size; gaps break the line rather than imply zero use."""
     image = Image.new("RGB", (1200, 510), theme.BACKGROUND)
     draw = ImageDraw.Draw(image)
     font = ImageFont.load_default(size=23)
     small = ImageFont.load_default(size=20)
+    total_font = ImageFont.load_default(size=16)
     left, right, top, bottom = 82, 1160, 48, 426
     values = model["values"]
     maximum = max((sum(row) / 3600 for row in values if row is not None), default=0)
@@ -159,7 +177,8 @@ def png(model, show_line=True):
             if seconds > 0:
                 _bar_segment(image, (round(x-width/2), round(y((base+seconds)/3600)),
                                      round(x+width/2), round(y(base/3600))),
-                             model["colors"][key], rounded=part == last_positive)
+                             model["colors"][key], rounded=part == last_positive,
+                             separator=part != last_positive)
             base += seconds
         point = (round(x), round(y(base/3600)))
         points.append(point)
@@ -175,23 +194,26 @@ def png(model, show_line=True):
                 draw.ellipse((x-7, height-7, x+7, height+7), fill=theme.BACKGROUND, outline=LINE, width=3)
         for position, label in labels:
             draw.text(position, label, fill=LINE, font=small, anchor="mb")
+    if show_totals:
+        draw = ImageDraw.Draw(image)
+        for point, row in zip(points, values):
+            if point is None or not row or sum(row) <= 0:
+                continue
+            seconds = sum(row)
+            label = (f"{seconds / 3600:.1f}h" if seconds >= 3600 else
+                     f"{seconds / 60:.0f}m" if seconds >= 60 else f"{seconds:.0f}s")
+            draw.text((point[0], max(top + 18, point[1] - 8)), label,
+                      fill=theme.TEXT, font=total_font, anchor="mb")
     buffer = BytesIO()
     image.save(buffer, format="PNG", optimize=True)
     return buffer.getvalue()
 
 
 def render(labels, buckets, observed, names, title, note="", limit=8, noun="项", show_line=True,
-           chart_style="echarts-inspired"):
+           chart_style="echarts-inspired", show_totals=False):
     from mail.report import format_duration
     model = prepare(labels, buckets, observed, limit)
-    # Match the timeline's summary-based application colors, even for ties.
-    named_colors = color_map(names)
-    for key in model["series"]:
-        if key in named_colors:
-            model["colors"][key] = named_colors[key]
-    if OTHER in model["colors"]:
-        model["colors"][OTHER] = theme.OTHER
-    encoded = base64.b64encode(png(model, show_line=show_line)).decode("ascii")
+    encoded = base64.b64encode(png(model, show_line=show_line, show_totals=show_totals)).decode("ascii")
     legend = []
     for key in model["series"]:
         seconds = (sum(model["totals"][key] for key in model["hidden"]) if key == OTHER
@@ -201,59 +223,19 @@ def render(labels, buckets, observed, names, title, note="", limit=8, noun="项"
                       f'<span style="color:{model["colors"][key]}">●</span> {html.escape(name)}'
                       f' <span style="color:#8894a5">{format_duration(seconds)}</span></td>')
     rows = "".join('<tr>' + "".join(legend[i:i+2]) + '</tr>' for i in range(0, len(legend), 2))
-    daily = " · ".join(f'{label}：{format_duration(sum(row)) if row is not None else "未收到"}'
-                       for label, row in zip(model["labels"], model["values"])
-                       if len(model["labels"]) <= 8 or row is None or sum(row) > 0)
-    hidden_note = (f'另有 {len(model["hidden"])} 个{noun}合并为“其他”，合计 '
-                   f'{format_duration(sum(model["totals"][k] for k in model["hidden"]))}，未丢弃时长。'
-                   if model["hidden"] else "")
+    missing = [label for label, row in zip(model["labels"], model["values"]) if row is None]
+    details = [part for part in (note.strip(), f'未收到：{"、".join(missing)}' if missing else "") if part]
+    hint = ("蓝线：每日总时长" if show_line else
+            "柱顶：每小时总时长" if show_totals else "")
+    hint_html = f'<p style="font-size:12px;color:#8592a3">{hint}</p>' if hint else ""
+    details_html = (f'<p style="font-size:12px;color:#8592a3">{html.escape(" · ".join(details))}</p>'
+                    if details else "")
     return (f'<h2 style="font-size:18px;color:{theme.TEXT};margin:24px 0 8px">{html.escape(title)}</h2>'
-            f'<p style="font-size:12px;color:#8592a3">柔色堆叠柱：{noun}时长构成 · '
-            f'{"蓝色曲线：总时长 · " if show_line else ""}单位：小时</p>'
+            f'{hint_html}'
             f'<img data-chart-style="{html.escape(chart_style, quote=True)}" width="600" height="255" style="display:block;width:100%;max-width:600px;height:auto" '
             f'alt="{html.escape(title, quote=True)}：堆叠柱状图{ "叠加总时长折线" if show_line else ""}" src="data:image/png;base64,{encoded}">'
             f'<table role="presentation" width="100%" cellpadding="0" cellspacing="0">{rows}</table>'
-            f'<p style="font-size:11px;color:#8592a3;line-height:1.8">{html.escape(daily)}</p>'
-            f'<p style="font-size:12px;color:#8592a3">{html.escape(note + hidden_note)}</p>')
-
-
-def daily_application_bars(apps, limit=28):
-    """A readable many-app daily chart; numbered bars map to an escaped HTML key."""
-    from mail.report import format_duration
-    ordered = sorted((a for a in apps if float(a.get("seconds") or 0) > 0),
-                     key=lambda a: (-float(a["seconds"]), a["app_name"]))
-    visible, hidden = ordered[:limit], ordered[limit:]
-    if not visible:
-        return '<p style="color:#8592a3">当天暂无应用使用记录。</p>'
-    entries = [(a.get("display_name") or a["app_name"], float(a["seconds"])) for a in visible]
-    if hidden:
-        entries.append((f"其他（{len(hidden)} 个应用）", sum(float(a["seconds"]) for a in hidden)))
-    height = 64 + len(entries) * 31
-    image = Image.new("RGB", (1200, height), theme.BACKGROUND)
-    draw = ImageDraw.Draw(image)
-    small = ImageFont.load_default(size=19)
-    maximum = max(seconds for _, seconds in entries)
-    palette = color_map(range(len(entries)))
-    for index, (_, seconds) in enumerate(entries):
-        y = 36 + index * 31
-        draw.text((13, y + 11), f"{index + 1:02d}", fill=theme.MUTED, font=small, anchor="lm")
-        draw.rounded_rectangle((54, y, 1030, y + 21), radius=8, fill=theme.GRID)
-        width = max(3, round(seconds / maximum * 976))
-        _bar_segment(image, (54, y, 54 + width, y + 21), palette[index], rounded=True)
-        draw.text((1042, y + 11), f"{seconds / 3600:.1f}h", fill=theme.TEXT, font=small, anchor="lm")
-    encoded = base64.b64encode(_encode_png(image)).decode("ascii")
-    legend = []
-    for index, (name, seconds) in enumerate(entries):
-        legend.append(f'<td width="50%" valign="top" style="padding:4px 8px;font-size:12px;color:#536176">'
-                      f'<span style="color:{palette[index]}">●</span> {index + 1:02d} '
-                      f'{html.escape(name)} · {format_duration(seconds)}</td>')
-    rows = "".join("<tr>" + "".join(legend[i:i+2]) + "</tr>" for i in range(0, len(legend), 2))
-    return (f'<h2 style="font-size:18px;color:{theme.TEXT};margin:24px 0 8px">当天软件使用时长</h2>'
-            '<p style="font-size:12px;color:#8592a3">横条长度表示当天用时，序号对应下方应用名称。</p>'
-            f'<img data-chart-style="daily-app-bars" width="600" height="{height // 2}" '
-            f'style="display:block;width:100%;max-width:600px;height:auto" '
-            f'alt="当天软件使用时长柱状图，共展示 {len(entries)} 类" src="data:image/png;base64,{encoded}">'
-            f'<table role="presentation" width="100%" cellpadding="0" cellspacing="0">{rows}</table>')
+            f'{details_html}')
 
 
 def _encode_png(image):
@@ -269,9 +251,6 @@ def application_chart(summary, start, end):
     # Keep old row caps useful for text-only readers and explicit small settings.
     if config.MAIL_MAX_APPS > 0:
         limit = min(limit, config.MAIL_MAX_APPS)
-    if start == end and summary.get("apps"):
-        return daily_application_bars(apps, min(28, config.MAIL_MAX_APPS)
-                                      if config.MAIL_MAX_APPS > 0 else 28)
     daily = summary.get("daily_apps")
     if start != end and daily is not None:
         days = [start + timedelta(days=i) for i in range((end-start).days+1)]
@@ -284,7 +263,7 @@ def application_chart(summary, start, end):
             if str(row["day"]) in index:
                 buckets[index[str(row["day"])]][row["app_name"]] += float(row["seconds"])
         return render([d.strftime("%m-%d") for d in days], buckets, [str(d) in present for d in days],
-                      names, "一周应用使用趋势", "未收到的日期留空并断开折线；有数据但未完成日终上传的日期按已收到值展示。", limit, "应用")
+                      names, "一周应用使用趋势", limit=limit, noun="应用")
     timeline = summary.get("_timeline_rows") or []
     total = float(summary.get("total_seconds") or 0)
     if start == end and timeline and abs(sum(float(r["seconds"]) for r in timeline)-total) <= max(60, total*.01):
@@ -329,27 +308,37 @@ def website_hourly_model(rows, hourly_rows, start, end, readiness=()):
     return days, result
 
 
-HEATMAP_ZERO = "#F6F9FC"
+# Inspired by the supplied visx palette, adapted to the report's light theme.
+HEATMAP_ZERO = "#F4FBF7"
+APP_HEATMAP_ZERO = "#FFF8F5"
 HEATMAP_MISSING = "#D5D9E1"
-HEATMAP_STOPS = ("#E3F0FA", "#A5D2EE", "#69AEDA", "#418FC9", "#276DA8")
+HEATMAP_STOPS = ("#E5FAF0", "#B4FBDE", "#74CFC4", "#387A91", "#122549")
+APP_HEATMAP_STOPS = ("#FFF0EB", "#F6B6A5", "#F67D5B", "#F33D15", "#77312F")
 
 
-def website_heatmap_color(seconds, maximum):
-    """Linear real-time scale with a wider light-to-dark range than the soft bars."""
+def _heatmap_color(seconds, maximum, stops, zero):
+    """Interpolate a light-to-dark scale while keeping zero distinct from missing."""
     if seconds <= 0 or maximum <= 0:
-        return HEATMAP_ZERO
-    position = min(1.0, seconds / maximum) * (len(HEATMAP_STOPS) - 1)
-    index = min(int(position), len(HEATMAP_STOPS) - 2)
+        return zero
+    position = min(1.0, seconds / maximum) * (len(stops) - 1)
+    index = min(int(position), len(stops) - 2)
     blend = position - index
-    start, end = HEATMAP_STOPS[index:index + 2]
+    start, end = stops[index:index + 2]
     rgb = [round(int(start[at:at + 2], 16) * (1 - blend) +
                  int(end[at:at + 2], 16) * blend) for at in (1, 3, 5)]
     return "#" + "".join(f"{value:02X}" for value in rgb)
 
 
-def weekly_website_heatmap(days, buckets):
-    """Date × hour heatmap. Missing snapshots use grey, not false zeroes."""
-    from mail.report import format_duration
+def website_heatmap_color(seconds, maximum):
+    return _heatmap_color(seconds, maximum, HEATMAP_STOPS, HEATMAP_ZERO)
+
+
+def application_heatmap_color(seconds, maximum):
+    return _heatmap_color(seconds, maximum, APP_HEATMAP_STOPS, APP_HEATMAP_ZERO)
+
+
+def _weekly_hour_heatmap(days, buckets, title, chart_style, noun, color_scale):
+    """Date × hour heatmap shared by real website and application snapshots."""
     image = Image.new("RGB", (1200, 480), theme.BACKGROUND)
     draw = ImageDraw.Draw(image)
     font = ImageFont.load_default(size=19)
@@ -365,14 +354,14 @@ def weekly_website_heatmap(days, buckets):
                   font=font, anchor="lm")
         for hour in range(24):
             seconds = None if buckets[row] is None else sum(buckets[row][hour].values())
-            fill = HEATMAP_MISSING if seconds is None else website_heatmap_color(seconds, maximum)
+            fill = HEATMAP_MISSING if seconds is None else color_scale(seconds, maximum)
             x, y = left + hour * cell_w, top + row * cell_h
             draw.rounded_rectangle((x, y, x + 36, y + 34), radius=6, fill=fill)
     draw.text((left, 399), "USE / HOUR", fill=theme.MUTED, font=font)
     for index, fraction in enumerate((0, .25, .5, .75, 1)):
         x = left + index * 112
         draw.rounded_rectangle((x, 424, x + 102, 444), radius=5,
-                               fill=website_heatmap_color(maximum * fraction, maximum))
+                               fill=color_scale(maximum * fraction, maximum))
         value = round(maximum * fraction)
         label = (f"{value // 3600}h{value % 3600 // 60:02d}m" if value >= 3600 else
                  f"{value // 60}m{value % 60:02d}s" if value >= 60 else f"{value}s")
@@ -380,54 +369,96 @@ def weekly_website_heatmap(days, buckets):
     draw.rounded_rectangle((900, 424, 930, 448), radius=4, fill=HEATMAP_MISSING)
     draw.text((940, 427), "missing", fill=theme.MUTED, font=font)
     encoded = base64.b64encode(_encode_png(image)).decode("ascii")
-    daily = " · ".join(f"{day:%m-%d}：{format_duration(sum(sum(h.values()) for h in row)) if row is not None else '未收到分时记录'}"
-                       for day, row in zip(days, buckets))
-    return (f'<h2 style="font-size:18px;color:{theme.TEXT};margin:24px 0 8px">一周网站使用热力图</h2>'
-            '<p style="font-size:12px;color:#8592a3">纵轴日期 · 横轴小时 · 蓝色由浅到深对应每小时使用时长，色阶按本周最高小时用量标定；浅白为零使用，灰色为未收到分时记录。</p>'
-            f'<img data-chart-style="weekly-web-heatmap" width="600" height="240" '
+    missing = [day.strftime("%m-%d") for day, row in zip(days, buckets) if row is None]
+    missing_html = (f'<p style="font-size:12px;color:#8592a3">分时缺失：{html.escape("、".join(missing))}</p>'
+                    if missing else "")
+    return (f'<h2 style="font-size:18px;color:{theme.TEXT};margin:24px 0 8px">{title}</h2>'
+            '<p style="font-size:12px;color:#8592a3">日期 × 小时 · 深色用时更长 · 浅白为零 · 灰色未收到</p>'
+            f'<img data-chart-style="{chart_style}" width="600" height="240" '
             f'style="display:block;width:100%;max-width:600px;height:auto" '
-            f'alt="一周网站使用热力图：日期与小时" src="data:image/png;base64,{encoded}">'
-            f'<p style="font-size:11px;color:#8592a3;line-height:1.8">{html.escape(daily)}</p>')
+            f'alt="一周{noun}使用热力图：日期与小时" src="data:image/png;base64,{encoded}">'
+            f'{missing_html}')
+
+
+def weekly_website_heatmap(days, buckets):
+    """Website snapshots: missing days are grey, never false zeroes."""
+    return _weekly_hour_heatmap(days, buckets, "一周网站使用热力图", "weekly-web-heatmap", "网站",
+                                website_heatmap_color)
+
+
+def application_hourly_model(summary, timeline_rows, start, end, readiness=()):
+    """Aggregate real 15-minute app bins into hours, validating each daily total."""
+    days = [start + timedelta(days=i) for i in range((end - start).days + 1)]
+    daily_apps = summary.get("daily_apps")
+    if daily_apps is None:
+        return days, [None] * len(days)
+    expected = defaultdict(float)
+    for row in daily_apps:
+        expected[str(row["day"])] += max(0.0, float(row["seconds"]))
+    buckets = {str(day): [defaultdict(float) for _ in range(24)] for day in days}
+    present = set()
+    for row in timeline_rows:
+        day = str(row.get("day", start))
+        try:
+            bucket = int(row["bucket"])
+            seconds = float(row["seconds"])
+            app_name = str(row["app_name"])
+        except (KeyError, TypeError, ValueError):
+            continue
+        if day in buckets and 0 <= bucket < 96 and math.isfinite(seconds) and seconds > 0 and app_name:
+            buckets[day][bucket // 4][app_name] += seconds
+            present.add(day)
+    complete = {(str(row["day"]), row["kind"]) for row in readiness if row["complete"]}
+    result = []
+    for day in days:
+        key = str(day)
+        actual = sum(sum(hour.values()) for hour in buckets[key])
+        total = expected[key]
+        empty_complete = total == 0 and (key, "apps") in complete and (key, "timeline") in complete
+        if not (key in present or empty_complete) or abs(actual - total) > max(2, total * .001):
+            result.append(None)
+        else:
+            result.append(buckets[key])
+    return days, result
+
+
+def weekly_application_heatmap(summary, timeline_rows, start, end, readiness=()):
+    """Use uploaded app bins only; never spread daily totals across hours."""
+    if summary.get("daily_apps") is None:
+        return (f'<h2 style="font-size:18px;color:{theme.TEXT};margin:24px 0 8px">一周软件使用热力图</h2>'
+                '<p style="font-size:12px;color:#8592a3">尚未收到每日软件汇总，无法校验分时记录；不推算每小时用量。</p>')
+    days, buckets = application_hourly_model(summary, timeline_rows, start, end, readiness)
+    return _weekly_hour_heatmap(days, buckets, "一周软件使用热力图", "weekly-app-heatmap", "软件",
+                                application_heatmap_color)
 
 
 def website_category_chart(rows):
-    """Soft pie from local host rules, with a readable HTML legend."""
+    """Centered, gently exploded category pie with a readable HTML legend."""
     from mail.report import format_duration
     totals = category_totals(rows, "seconds")
     if not totals:
         return ""
     total = sum(totals.values())
-    image = Image.new("RGB", (600, 400), theme.BACKGROUND)
+    scale = 3  # Supersample the curved edges before embedding in email.
+    image = Image.new("RGB", (600 * scale, 400 * scale), theme.BACKGROUND)
     draw = ImageDraw.Draw(image)
-    font = ImageFont.load_default(size=23)
     angle = -90.0
-    colors = dict(CATEGORIES)
-    labels, boundaries = [], []
+    colors = {name: PIE_PALETTE[index] for index, (name, _) in enumerate(CATEGORIES)}
+    separated = len(totals) > 1
     for name, seconds in totals.items():
         sweep = seconds / total * 360
-        color = colors[name]
-        base = tuple(int(color[index:index+2], 16) for index in (1, 3, 5))
-        draw.pieslice((115, 15, 485, 385), angle, angle + sweep, fill=color)
-        for layer in range(1, 19):
-            radius = 185 * (1 - layer / 19)
-            lift = .19 * layer / 19
-            fill = tuple(round(value + (255 - value) * lift) for value in base)
-            draw.pieslice((300-radius, 200-radius, 300+radius, 200+radius),
-                          angle, angle + sweep, fill=fill)
-        boundaries.append(angle)
-        if sweep >= 22:
-            middle = math.radians(angle + sweep / 2)
-            x = 300 + math.cos(middle) * 118
-            y = 200 + math.sin(middle) * 118
-            labels.append((x, y, f"{seconds / total:.0%}"))
+        middle = math.radians(angle + sweep / 2)
+        offset = 8 if separated else 0
+        center_x = 300 + offset * math.cos(middle)
+        center_y = 200 + offset * math.sin(middle)
+        radius = 170
+        inset = min(1.1, sweep * .1) if separated else 0
+        draw.pieslice(tuple(round(value * scale) for value in
+                            (center_x-radius, center_y-radius,
+                             center_x+radius, center_y+radius)),
+                      angle + inset, angle + sweep - inset, fill=colors[name])
         angle += sweep
-    for boundary in boundaries:
-        direction = math.radians(boundary)
-        draw.line((300, 200, 300 + 185 * math.cos(direction),
-                   200 + 185 * math.sin(direction)), fill=theme.BACKGROUND, width=4)
-    draw.ellipse((115, 15, 485, 385), outline=theme.BACKGROUND, width=4)
-    for x, y, label in labels:
-        draw.text((x, y), label, fill="#283A52", font=font, anchor="mm")
+    image = image.resize((600, 400), Image.Resampling.LANCZOS)
     encoded = base64.b64encode(_encode_png(image)).decode("ascii")
     legend = [
         f'<td width="50%" valign="top" style="padding:4px 8px;font-size:12px;color:#536176">'
@@ -437,21 +468,22 @@ def website_category_chart(rows):
                           for i in range(0, len(legend), 2))
     # Each category stays listed even when a narrow mail client wraps the table.
     return (f'<h2 style="font-size:18px;color:{theme.TEXT};margin:24px 0 8px">网站类型占比</h2>'
-            '<p style="font-size:12px;color:#8592a3">按域名本地规则归类；未知网站列为“其他”，不读取页面内容。</p>'
+            f'<table role="presentation" width="100%" cellpadding="0" cellspacing="0">{legend_rows}</table>'
             '<table role="presentation" width="100%" cellpadding="0" cellspacing="0">'
             '<tr><td align="center" style="text-align:center">'
             f'<img data-chart-style="website-category-pie" width="300" height="200" '
             f'style="display:block;width:300px;max-width:100%;height:auto;margin:0 auto" '
             f'alt="网站类型使用时长占比饼图" src="data:image/png;base64,{encoded}">'
-            '</td></tr></table>'
-            f'<table role="presentation" width="100%" cellpadding="0" cellspacing="0">{legend_rows}</table>')
+            '</td></tr></table>')
 
 
 def website_gantt_chart(rows, interval_rows, day, *, key="host", title="网站使用时段",
-                        noun="网站", chart_style="website-gantt", display_names=None):
+                        noun="网站", chart_style="website-gantt", display_names=None,
+                        min_seconds=0, max_visible=24):
     """Daily real intervals on a time axis; never infer spans from totals."""
     from mail.report import format_duration
-    display_names = display_names or {}
+    display_names = display_names or (site_names_for_rows(rows) if key == "host" else {})
+    chart_names = site_names_for_rows(rows, chart=True) if key == "host" else display_names
     totals = defaultdict(float)
     for row in rows:
         if str(row.get("day", day)) == str(day):
@@ -479,7 +511,10 @@ def website_gantt_chart(rows, interval_rows, day, *, key="host", title="网站�
                 f'<p style="font-size:12px;color:#8592a3">{missing_note}</p>')
 
     ordered = sorted(totals, key=lambda host: (-totals[host], host))
-    visible, hidden = ordered[:24], ordered[24:]
+    eligible = [name for name in ordered if totals[name] >= min_seconds]
+    visible = eligible[:max_visible] or ordered[:1]
+    visible_set = set(visible)
+    hidden = [name for name in ordered if name not in visible_set]
     earliest = min(start for host in visible for start, _ in intervals[host])
     latest = max(end for host in visible for _, end in intervals[host])
     left_hour = max(0, math.floor(earliest / 3600))
@@ -508,7 +543,7 @@ def website_gantt_chart(rows, interval_rows, day, *, key="host", title="网站�
     palette = color_map(visible)
     for index, host in enumerate(visible):
         y = top + index * stride
-        display_label = display_names.get(host, host)
+        display_label = chart_names.get(host, host)
         if any(ord(char) > 127 for char in display_label):
             display_label = host  # Pillow's bundled font has no CJK glyphs; HTML legend has the full label.
         label = display_label if len(display_label) <= 20 else display_label[:17] + "..."
@@ -531,15 +566,18 @@ def website_gantt_chart(rows, interval_rows, day, *, key="host", title="网站�
               f'{format_duration(totals[host])}</td>' for host in visible]
     legend_rows = "".join("<tr>" + "".join(legend[i:i+2]) + "</tr>"
                           for i in range(0, len(legend), 2))
-    hidden_note = (f'另有 {len(hidden)} 个{noun}未在图中逐项显示，共 {format_duration(sum(totals[h] for h in hidden))}。'
+    threshold_note = "（含用时不足 1 分钟的项目）" if min_seconds == 60 else ""
+    hidden_note = (f'另有 {len(hidden)} 个{noun}{threshold_note}未展示 · '
+                   f'合计 {format_duration(sum(totals[h] for h in hidden))}（已计入总时长）'
                    if hidden else "")
+    hidden_html = f'<p style="font-size:12px;color:#8592a3">{hidden_note}</p>' if hidden_note else ""
     return (f'<h2 style="font-size:18px;color:{theme.TEXT};margin:24px 0 8px">{title}</h2>'
-            f'<p style="font-size:12px;color:#8592a3">横轴为当天时间，纵轴为{noun}；每段柔色横条对应一次真实使用时段。</p>'
+            f'<p style="font-size:12px;color:#8592a3">时间 × {noun} · 图例为当天总时长</p>'
             f'<img data-chart-style="{chart_style}" width="600" height="{height // 2}" '
             f'style="display:block;width:100%;max-width:600px;height:auto" '
             f'alt="{noun}使用甘特图，按名称展示真实使用时段" src="data:image/png;base64,{encoded}">'
             f'<table role="presentation" width="100%" cellpadding="0" cellspacing="0">{legend_rows}</table>'
-            f'<p style="font-size:12px;color:#8592a3">{hidden_note}</p>')
+            f'{hidden_html}')
 
 
 def application_gantt_chart(summary, interval_rows, day):
@@ -548,8 +586,10 @@ def application_gantt_chart(summary, interval_rows, day):
     rows = [{"day": str(day), "app_name": app["app_name"], "seconds": app["seconds"]}
             for app in apps if float(app.get("seconds") or 0) > 0]
     names = {app["app_name"]: app.get("display_name") or app["app_name"] for app in apps}
-    return website_gantt_chart(rows, interval_rows, day, key="app_name", title="软件使用时段",
-                               noun="软件", chart_style="application-gantt", display_names=names)
+    max_visible = min(40, config.MAIL_MAX_APPS) if config.MAIL_MAX_APPS > 0 else 40
+    return website_gantt_chart(rows, interval_rows, day, key="app_name", title="软件使用时段和时长",
+                               noun="软件", chart_style="application-gantt", display_names=names,
+                               min_seconds=60, max_visible=max_visible)
 
 
 def weekly_website_daily_model(rows, start, end, readiness=()):
@@ -572,11 +612,9 @@ def weekly_website_stacked_chart(rows, start, end, readiness=()):
     limit = max(1, min(12, config.MAIL_CHART_SERIES))
     if config.MAIL_MAX_SITES > 0:
         limit = min(limit, config.MAIL_MAX_SITES)
-    return render([day.strftime("%m-%d") for day in days], buckets, observed, {},
-                  "一周网站每日使用时长",
-                  "每根柱代表一天，柔色块为各网站时长，蓝色折线为当天网站总用时；"
-                  "未收到的日期留空并断开折线，确认完成的空日期显示零。"
-                  "网站时长已包含在浏览器应用中，不与应用总时长相加。",
+    return render([day.strftime("%m-%d") for day in days], buckets, observed,
+                  site_names_for_rows(rows),
+                  "一周网站每日使用时长", "",
                   limit, "网站", show_line=True, chart_style="weekly-site-stacked")
 
 
@@ -587,13 +625,14 @@ def website_chart(rows, start, end, readiness=(), hourly_rows=()):
                  weekly_website_heatmap(days, hours))
     elif hours[0] is None:
         chart = ('<h2 style="font-size:18px;color:#34425c;margin:24px 0 8px">每小时网站使用</h2>'
-                 '<p style="font-size:12px;color:#8592a3">尚未收到这一天的每小时记录；旧客户端仅上传每日汇总，不推算分时用量。</p>')
+                 '<p style="font-size:12px;color:#8592a3">分时记录未收到，不推算每小时用量。</p>')
     else:
         buckets = hours[0]
         limit = max(1, min(12, config.MAIL_CHART_SERIES))
         if config.MAIL_MAX_SITES > 0:
             limit = min(limit, config.MAIL_MAX_SITES)
-        chart = render([f"{hour:02d}:00" for hour in range(24)], buckets, [True] * 24, {},
-                       "每小时网站使用", "依据网站真实使用片段汇总，网站时长已包含在浏览器应用中，不与应用总时长相加。",
-                       limit, "网站", show_line=False)
+        chart = render([f"{hour:02d}:00" for hour in range(24)], buckets, [True] * 24,
+                       site_names_for_rows(rows),
+                       "每小时网站使用", "",
+                       limit, "网站", show_line=False, show_totals=True)
     return chart + website_category_chart(rows)

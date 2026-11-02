@@ -13,7 +13,7 @@ from PIL import Image
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import config
 from db import usage_records
-from mail import charts, colors, report, sender, tracking_report
+from mail import charts, colors, report, sender, site_names, tracking_report
 
 
 class MailChartTests(unittest.TestCase):
@@ -35,6 +35,18 @@ class MailChartTests(unittest.TestCase):
         image = Image.open(BytesIO(charts.png(model)))
         self.assertEqual(image.size, (1200, 510))
 
+    def test_stacked_bars_use_distinct_category_colors_and_dividers(self):
+        model = charts.prepare(["Day"], [{"blue": 3600, "orange": 2400,
+                                          "green": 1200, "other": 60}], [True], limit=3)
+        self.assertEqual([model["colors"][key] for key in model["series"][:3]],
+                         list(charts.STACK_PALETTE[:3]))
+        self.assertEqual(model["colors"][charts.OTHER], charts.theme.OTHER)
+        self.assertEqual(len(set(charts.STACK_PALETTE)), len(charts.STACK_PALETTE))
+        tile = Image.new("RGB", (8, 8), "#FFFFFF")
+        charts._bar_segment(tile, (0, 0, 8, 8), charts.STACK_PALETTE[0], separator=True)
+        self.assertEqual(tile.getpixel((4, 0)), (255, 255, 255))
+        self.assertNotEqual(tile.getpixel((4, 3)), (255, 255, 255))
+
     def test_smoothing_keeps_actual_points_without_overshoot_or_negative_usage(self):
         points = [(0, 1), (1, 0), (2, 4), (3, 4), (4, 2)]
         samples = charts.smooth_line(points)
@@ -55,7 +67,7 @@ class MailChartTests(unittest.TestCase):
     def test_echarts_inspired_theme_is_static_and_server_only(self):
         body = charts.render(["A", "B"], [{"app": 60}, {"app": 120}], [True, True], {}, "example")
         self.assertIn('data-chart-style="echarts-inspired"', body)
-        self.assertIn("蓝色曲线", body)
+        self.assertIn("蓝线：每日总时长", body)
         self.assertNotIn("<script", body)
         self.assertNotIn("https://", body)
         self.assertEqual(len(charts.IMAGE_DATA.findall(body)), 1)
@@ -66,8 +78,9 @@ class MailChartTests(unittest.TestCase):
         sites = [{"day": str(self.start), "host": f"site-{i:02d}.example", "seconds": 100} for i in range(41)]
         message = tracking_report.append_sections(report.build_weekly_message(self.end, self.summary),
             self.summary, bins, sites, self.start, self.end)
-        self.assertEqual(message[2].count("data:image/png;base64,"), 4)
+        self.assertEqual(message[2].count("data:image/png;base64,"), 5)
         self.assertIn("一周应用使用趋势", message[2])
+        self.assertIn('data-chart-style="weekly-app-heatmap"', message[2])
         self.assertIn("一周网站每日使用时长", message[2])
         self.assertIn('data-chart-style="weekly-site-stacked"', message[2])
         self.assertIn("一周网站使用热力图", message[2])
@@ -78,13 +91,14 @@ class MailChartTests(unittest.TestCase):
         self.assertNotIn("linear-gradient", message[2])
         self.assertNotIn('data-timeline="itinerary"', message[2])
         self.assertLess(charts.html_size(message[2]), 80000)
-        self.assertIn("10-20：6 小时", message[2])
-        self.assertIn("10-22：未收到", message[2])
+        self.assertNotIn("10-20：6 小时", message[2])
+        self.assertIn("分时缺失：", message[2])
+        self.assertIn("10-22", message[2])
 
     def test_weekly_without_daily_detail_never_fabricates_daily_values(self):
         summary = {k: v for k, v in self.summary.items() if k != "daily_apps"}
         body = report.build_weekly_html(self.end, summary)
-        self.assertIn("Week：15 小时 15 分", body)
+        self.assertIn("应用时长构成", body)
         self.assertIn("不推算每天/小时的分布", body)
         self.assertNotIn("10-20：", body)
 
@@ -92,15 +106,32 @@ class MailChartTests(unittest.TestCase):
         ready = [{"day": str(self.start+timedelta(days=1)), "kind": "web_hourly", "complete": True}]
         body = charts.website_chart([{"day": str(self.start), "host": "test", "seconds": 60}],
                                     self.start, self.end, ready)
-        self.assertIn("10-20：0 秒", body)
-        self.assertIn("10-21：未收到分时记录", body)
+        days, hours = charts.website_hourly_model(
+            [{"day": str(self.start), "host": "test", "seconds": 60}], [],
+            self.start, self.end, ready)
+        self.assertEqual(len(days), 7)
+        self.assertIsNotNone(hours[1])
+        self.assertEqual(sum(sum(bucket.values()) for bucket in hours[1]), 0)
+        self.assertIsNone(hours[2])
+        self.assertIn("分时缺失：", body)
+        self.assertIn("10-21", body)
 
-    def test_daily_app_usage_shows_many_readable_bars(self):
-        summary = {"apps": self.apps[:1], "total_seconds": 900,
-                   "_timeline_rows": [{"app_name": self.apps[0]["app_name"], "bucket": 36, "seconds": 900}]}
-        self.assertIn('data-chart-style="daily-app-bars"', report.build_html(self.start, summary))
-        summary["total_seconds"] = 5000
-        self.assertIn("当天软件使用时长", report.build_html(self.start, summary))
+    def test_daily_app_gantt_replaces_bars_and_hides_tiny_legend_entries(self):
+        apps = [{**app, "seconds": seconds} for app, seconds in zip(self.apps[:3], (900, 60, 30))]
+        summary = {"apps": apps, "total_seconds": 990, "app_count": 3}
+        intervals = [{"day": str(self.start), "app_name": app["app_name"],
+                      "start_second": start, "end_second": start + app["seconds"]}
+                     for app, start in zip(apps, (32400, 33300, 33360))]
+        message = tracking_report.append_sections(report.build_message(self.start, summary),
+            summary, [], [], self.start, self.start, app_intervals=intervals)
+        body = message[2]
+        self.assertNotIn('data-chart-style="daily-app-bars"', body)
+        self.assertIn("软件使用时段和时长", body)
+        self.assertIn("Application 00 · 15 分", body)
+        self.assertIn("Application 01 · 1 分", body)
+        self.assertNotIn("Application 02 ·", body)
+        self.assertIn("另有 1 个软件", body)
+        self.assertIn("已计入总时长", body)
 
     def test_real_hourly_site_bins_drive_daily_stack_and_weekly_heatmap(self):
         rows = [{"day": str(self.start), "host": "github.com", "seconds": 600},
@@ -112,15 +143,23 @@ class MailChartTests(unittest.TestCase):
         self.assertEqual(buckets[0][9]["github.com"], 600)
         daily = charts.website_chart(rows, self.start, self.start, hourly_rows=hourly)
         self.assertIn("每小时网站使用", daily)
+        self.assertIn("柱顶：每小时总时长", daily)
         self.assertIn("网站类型占比", daily)
         self.assertEqual(daily.count("data:image/png;base64,"), 2)
+        self.assertNotEqual(
+            charts.png(charts.prepare([f"{hour:02d}" for hour in range(24)],
+                                      [{"github.com": 600} if hour == 9 else {} for hour in range(24)],
+                                      [True] * 24, 8), show_line=False),
+            charts.png(charts.prepare([f"{hour:02d}" for hour in range(24)],
+                                      [{"github.com": 600} if hour == 9 else {} for hour in range(24)],
+                                      [True] * 24, 8), show_line=False, show_totals=True))
         self.assertIn('<td align="center" style="text-align:center"><img data-chart-style="website-category-pie"',
                       daily)
         self.assertIn("工作学习", daily)
         self.assertIn("视频娱乐", daily)
         weekly = charts.website_chart(rows, self.start, self.end, hourly_rows=hourly)
         self.assertIn('data-chart-style="weekly-web-heatmap"', weekly)
-        self.assertIn("10-20：未收到分时记录", weekly)
+        self.assertIn("分时缺失：10-20", weekly)
         self.assertIsNone(charts.website_hourly_model(rows, hourly[:1], self.start, self.start)[1][0])
 
     def test_weekly_heatmap_has_readable_monotone_duration_scale(self):
@@ -131,6 +170,37 @@ class MailChartTests(unittest.TestCase):
         self.assertEqual(brightness, sorted(brightness, reverse=True))
         self.assertNotEqual(charts.HEATMAP_ZERO, charts.HEATMAP_MISSING)
         self.assertEqual(charts.website_heatmap_color(0, 0), charts.HEATMAP_ZERO)
+        self.assertEqual(charts.website_heatmap_color(150, 600), "#B4FBDE")
+        self.assertEqual(charts.website_heatmap_color(600, 600), "#122549")
+        warm = [charts.application_heatmap_color(seconds, 600)
+                for seconds in (0, 1, 150, 300, 450, 600)]
+        warm_brightness = [sum(int(color[at:at + 2], 16) for at in (1, 3, 5)) for color in warm]
+        self.assertEqual(len(set(warm)), len(warm))
+        self.assertEqual(warm_brightness, sorted(warm_brightness, reverse=True))
+        self.assertEqual(charts.application_heatmap_color(450, 600), "#F33D15")
+        self.assertEqual(charts.application_heatmap_color(600, 600), "#77312F")
+        self.assertNotEqual(charts.APP_HEATMAP_ZERO, charts.HEATMAP_MISSING)
+
+    def test_weekly_application_heatmap_checks_daily_bins_and_missing_days(self):
+        summary = {"daily_apps": [
+            {"day": str(self.start), "app_name": "editor.exe", "seconds": 900},
+            {"day": str(self.start + timedelta(days=1)), "app_name": "editor.exe", "seconds": 900}]}
+        bins = [
+            {"day": str(self.start), "bucket": 36, "app_name": "editor.exe", "seconds": 900},
+            {"day": str(self.start + timedelta(days=1)), "bucket": 40, "app_name": "editor.exe", "seconds": 300}]
+        ready = [{"day": str(self.start + timedelta(days=2)), "kind": kind, "complete": True}
+                 for kind in ("apps", "timeline")]
+        days, hours = charts.application_hourly_model(summary, bins, self.start, self.end, ready)
+        self.assertEqual(len(days), 7)
+        self.assertEqual(sum(hours[0][9].values()), 900)
+        self.assertIsNone(hours[1])  # Incomplete bins must not pretend to cover the day.
+        self.assertEqual(sum(sum(hour.values()) for hour in hours[2]), 0)
+        self.assertIsNone(hours[3])
+        body = charts.weekly_application_heatmap(summary, bins, self.start, self.end, ready)
+        self.assertIn('data-chart-style="weekly-app-heatmap"', body)
+        self.assertNotIn("10-19：15 分", body)
+        self.assertIn("分时缺失：10-20", body)
+        self.assertNotIn("10-21：0 秒", body)
 
     def test_weekly_site_stacks_use_daily_hosts_and_preserve_missing_days(self):
         rows = [{"day": str(self.start), "host": "github.com", "seconds": 600},
@@ -144,13 +214,26 @@ class MailChartTests(unittest.TestCase):
         self.assertEqual(dict(buckets[2]), {"github.com": 1800})
         self.assertEqual(observed, [True, True, True, False, False, False, False])
         body = charts.weekly_website_stacked_chart(rows, self.start, self.end, ready)
-        self.assertIn("蓝色曲线：总时长", body)
+        self.assertIn("蓝线：每日总时长", body)
         self.assertIn("叠加总时长折线", body)
-        self.assertIn("10-19：15 分", body)
-        self.assertIn("10-20：0 秒", body)
-        self.assertIn("10-21：30 分", body)
-        self.assertIn("10-22：未收到", body)
+        self.assertNotIn("10-19：15 分", body)
+        self.assertNotIn("10-20：0 秒", body)
+        self.assertIn("未收到：10-22", body)
         self.assertEqual(len(charts.IMAGE_DATA.findall(body)), 1)
+
+    def test_category_pie_uses_separated_flat_slices_and_legend_above(self):
+        hosts = ("x.com", "youtube.com", "github.com", "bbc.com",
+                 "taobao.com", "google.com", "unknown.example")
+        body = charts.website_category_chart(
+            [{"host": host, "seconds": 600} for host in hosts])
+        self.assertLess(body.index("社交媒体"), body.index('data-chart-style="website-category-pie"'))
+        image = Image.open(BytesIO(base64.b64decode(charts.IMAGE_DATA.search(body).group(1))))
+        self.assertEqual(image.size, (600, 400))
+        raw = image.convert("RGB").tobytes()
+        pixels = {raw[index:index + 3] for index in range(0, len(raw), 3)}
+        for color in charts.PIE_PALETTE:
+            self.assertIn(bytes.fromhex(color[1:]), pixels)
+        self.assertIn(b"\xff\xff\xff", pixels)  # White gutters separate the slices.
 
     def test_daily_gantt_uses_only_real_complete_intervals(self):
         sites = [{"day": str(self.start), "host": "github.com", "seconds": 900}]
@@ -160,7 +243,7 @@ class MailChartTests(unittest.TestCase):
         self.assertIn('data-chart-style="website-gantt"', body)
         image = base64.b64decode(charts.IMAGE_DATA.search(body).group(1), validate=True)
         Image.open(BytesIO(image)).verify()
-        self.assertIn("github.com", body)
+        self.assertIn("GitHub · 15 分", body)
         self.assertNotIn('data-chart-style="website-gantt"',
                          charts.website_gantt_chart(sites, intervals[:0], self.start))
         self.assertIn("不根据每日总量", charts.website_gantt_chart(sites, [], self.start))
@@ -172,6 +255,28 @@ class MailChartTests(unittest.TestCase):
                                            self.start, self.end, site_intervals=intervals)
         self.assertNotIn('data-chart-style="website-gantt"', weekly)
 
+    def test_known_site_names_are_display_only_and_unknown_hosts_stay_distinct(self):
+        self.assertEqual(site_names.names_for_hosts(["github.com", "www.douyin.com", "unknown.example"]),
+                         {"github.com": "GitHub", "www.douyin.com": "抖音",
+                          "unknown.example": "unknown.example"})
+        self.assertEqual(site_names.names_for_hosts(["github.com", "www.github.com"]),
+                         {"github.com": "GitHub (github.com)",
+                          "www.github.com": "GitHub (www.github.com)"})
+        self.assertEqual(site_names.names_for_hosts(["www.douyin.com"], chart=True),
+                         {"www.douyin.com": "Douyin"})
+        rows = [{"day": str(self.start), "host": "www.douyin.com", "seconds": 120},
+                {"day": str(self.start), "host": "unknown.example", "seconds": 60}]
+        intervals = [{"day": str(self.start), "host": row["host"],
+                      "start_second": 32400 + index * 120,
+                      "end_second": 32400 + index * 120 + row["seconds"]}
+                     for index, row in enumerate(rows)]
+        gantt = charts.website_gantt_chart(rows, intervals, self.start)
+        weekly = charts.weekly_website_stacked_chart(rows, self.start, self.end)
+        self.assertIn("抖音 · 2 分", gantt)
+        self.assertIn("unknown.example · 1 分", gantt)
+        self.assertIn("抖音", weekly)
+        self.assertIn("unknown.example", weekly)
+
     def test_daily_application_gantt_uses_real_intervals_and_remains_optional(self):
         summary = {"total_seconds": 600, "app_count": 1,
                    "apps": [{"app_name": "editor.exe", "display_name": "<Editor>",
@@ -181,6 +286,7 @@ class MailChartTests(unittest.TestCase):
         message = tracking_report.append_sections(report.build_message(self.start, summary),
             summary, [], [], self.start, self.start, app_intervals=intervals)
         self.assertIn('data-chart-style="application-gantt"', message[2])
+        self.assertIn("软件使用时段和时长", message[2])
         self.assertIn("&lt;Editor&gt;", message[2])
         Image.open(BytesIO(base64.b64decode(charts.IMAGE_DATA.findall(message[2])[-1]))).verify()
         missing = tracking_report.append_sections(report.build_message(self.start, summary),

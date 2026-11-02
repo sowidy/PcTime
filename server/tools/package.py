@@ -15,7 +15,7 @@ def main():
     args = parser.parse_args()
     required = ("app.py", "api/tracking.py", "api/tracking_schemas.py", "db/tracking.py",
                 "mail/tracking_report.py", "mail/charts.py", "mail/chart_theme.py", "mail/colors.py", "mail/timeline.py",
-                "mail/site_categories.py",
+                "mail/site_categories.py", "mail/site_names.py",
                 "db/schema.sql", "run.py", "check.py")
     for name in required:
         if not (SERVER / name).is_file():
