@@ -122,14 +122,33 @@ class TimelineBin(StrictModel):
         return value.lower()
 
 
+class AppInterval(StrictModel):
+    app_name: str = Field(min_length=1, max_length=255)
+    start_second: float = Field(ge=0, lt=86400)
+    end_second: float = Field(gt=0, le=86400)
+
+    @field_validator("app_name")
+    @classmethod
+    def app_only(cls, value):
+        return TimelineBin.app_only(value)
+
+    @model_validator(mode="after")
+    def valid_range(self):
+        if self.end_second <= self.start_second:
+            raise ValueError("interval end must follow start")
+        return self
+
+
 class TimelineDay(StrictModel):
     day: date
     bins: list[TimelineBin] = Field(max_length=1000)
+    intervals: list[AppInterval] | None = Field(default=None, max_length=10000)
     complete: bool = False
 
     @model_validator(mode="after")
     def validate_total(self):
         totals = defaultdict(float)
+        by_app = defaultdict(float)
         seen = set()
         for b in self.bins:
             key = (b.bucket, b.app_name)
@@ -137,8 +156,17 @@ class TimelineDay(StrictModel):
                 raise ValueError("duplicate bin")
             seen.add(key)
             totals[b.bucket] += b.seconds
+            by_app[b.app_name] += b.seconds
         if any(s > 905 for s in totals.values()) or sum(totals.values()) > 86700:
             raise ValueError("invalid total")
+        if self.intervals is not None:
+            interval_totals = defaultdict(float)
+            for interval in self.intervals:
+                interval_totals[interval.app_name] += interval.end_second - interval.start_second
+            if set(interval_totals) != set(by_app) or any(
+                    abs(interval_totals[app] - seconds) > max(2, seconds * .001)
+                    for app, seconds in by_app.items()):
+                raise ValueError("application intervals must match timeline bins")
         return self
 
 

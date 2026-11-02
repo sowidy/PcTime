@@ -6,7 +6,8 @@ import heapq
 from core import storage
 
 
-def build_bins(day):
+def build_snapshot(day):
+    """Return 15-minute totals and the same snapshot's real foreground spans."""
     day = date.fromisoformat(str(day))
     midnight = datetime.combine(day, datetime.min.time())
     with storage._get_conn() as conn:
@@ -28,13 +29,18 @@ def build_bins(day):
             events[end].append((r["id"], False))
         except (TypeError, ValueError):
             continue
-    active, priority, totals = set(), [], defaultdict(float)
+    active, priority, totals, intervals = set(), [], defaultdict(float), []
     previous = 0.0
     for point in sorted(events):
         while priority and -priority[0] not in active:
             heapq.heappop(priority)
         if priority:
             app = names[-priority[0]]
+            if point > previous:
+                if intervals and intervals[-1]["app_name"] == app and abs(intervals[-1]["end_second"] - previous) < 1e-6:
+                    intervals[-1]["end_second"] = point
+                else:
+                    intervals.append({"app_name": app, "start_second": previous, "end_second": point})
             cursor = previous
             while cursor < point:
                 bucket = min(95, int(cursor // 900))
@@ -55,4 +61,13 @@ def build_bins(day):
         raise ValueError("时间线与应用汇总不一致")
     if len(bins) > 1000:
         raise ValueError("时间线超过单日限额")
-    return bins
+    if len(intervals) > 10000:
+        raise ValueError("应用时段超过单日限额")
+    return bins, [{"app_name": r["app_name"],
+                   "start_second": round(r["start_second"], 3),
+                   "end_second": round(r["end_second"], 3)} for r in intervals]
+
+
+def build_bins(day):
+    """Compatibility entry point for the existing 15-minute upload and tests."""
+    return build_snapshot(day)[0]

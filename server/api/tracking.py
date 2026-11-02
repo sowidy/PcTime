@@ -91,6 +91,12 @@ def upload_dataset(kind, req, authorization):
                         else:
                             count += store.replace_day(cur, "web_intervals", str(req.user_key), day.day,
                                                        [r.model_dump() for r in day.intervals], day.complete)
+                    else:
+                        if day.intervals is None:
+                            store.clear_day(cur, "app_intervals", str(req.user_key), day.day)
+                        else:
+                            count += store.replace_day(cur, "app_intervals", str(req.user_key), day.day,
+                                                       [r.model_dump() for r in day.intervals], day.complete)
     except pymysql.MySQLError:
         raise HTTPException(503, "写入失败，请稍后重试")
     return {"ok": True, "days_written": len(req.days), "rows_written": count}
@@ -175,4 +181,13 @@ def read_timeline(user_key: UUID, start: date | None = None, end: date | None = 
     authenticate(user_key, authorization)
     start, end = checked_range(start, end)
     return {"records": store.read_range("timeline", str(user_key), start, end),
+            "readiness": store.readiness(str(user_key), start, end)}
+
+
+@router.get("/api/v1/app-intervals/{user_key}")
+def read_app_intervals(user_key: UUID, start: date | None = None, end: date | None = None,
+                       authorization: str = Header(default="")):
+    authenticate(user_key, authorization)
+    start, end = checked_range(start, end)
+    return {"records": store.read_range("app_intervals", str(user_key), start, end),
             "readiness": store.readiness(str(user_key), start, end)}

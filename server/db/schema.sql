@@ -73,6 +73,16 @@ CREATE TABLE IF NOT EXISTS `app_timeline_bins` (
   FOREIGN KEY (`user_key`) REFERENCES `users` (`user_key`) ON DELETE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
+CREATE TABLE IF NOT EXISTS `app_timeline_intervals` (
+  `id` BIGINT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
+  `user_key` CHAR(36) NOT NULL, `day` DATE NOT NULL,
+  `app_name` VARCHAR(255) NOT NULL,
+  `start_second` DOUBLE NOT NULL, `end_second` DOUBLE NOT NULL,
+  `uploaded_at` DATETIME NOT NULL,
+  KEY `idx_app_interval_day` (`user_key`,`day`),
+  FOREIGN KEY (`user_key`) REFERENCES `users` (`user_key`) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
 CREATE TABLE IF NOT EXISTS `tracking_uploads` (
   `user_key` CHAR(36) NOT NULL, `day` DATE NOT NULL, `kind` VARCHAR(16) NOT NULL,
   `complete` BOOLEAN NOT NULL DEFAULT FALSE, `uploaded_at` DATETIME NOT NULL,

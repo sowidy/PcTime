@@ -108,6 +108,25 @@ class TrackingUploadTests(TestCase):
             self.assertEqual(tracking_upload.run_once()["web"], "ok")
             self.assertEqual(len(sent), 3)
 
+    def test_timeline_upload_includes_real_app_intervals_for_daily_mail(self):
+        storage.set_setting("timeline_upload_enabled", "1")
+        day = date.today() - timedelta(days=1)
+        start = datetime.combine(day, datetime.min.time()).replace(hour=9, minute=10)
+        storage.record_fragment("editor.exe", "private title", "C:/private/editor.exe",
+                                start.isoformat(), (start + timedelta(minutes=10)).isoformat(), 600)
+        sent = []
+        def post(path, payload, token):
+            if path == "/app-timeline/upload":
+                sent.extend(payload["days"])
+            return {"ok": True}
+        with mock.patch.object(tracking_upload, "post", side_effect=post):
+            self.assertEqual(tracking_upload.run_once()["timeline"], "ok")
+        snapshot = next(row for row in sent if row["day"] == str(day))
+        self.assertEqual(snapshot["intervals"], [{"app_name": "editor.exe", "start_second": 33000,
+                                                   "end_second": 33600}])
+        self.assertNotIn("private", str(snapshot))
+        self.assertEqual(storage.get_setting("app_intervals_backfill_v1"), "1")
+
     def test_existing_hourly_installation_backfills_intervals_once(self):
         storage.set_setting("web_upload_enabled", "1")
         storage.set_setting("web_hourly_backfill_v1", "1")

@@ -112,6 +112,24 @@ class TrackingRouteTests(TestCase):
         self.assertTrue(any("website_hourly_usage" in sql for sql in inserts))
         self.assertTrue(any("website_intervals" in sql for sql in inserts))
 
+    def test_application_upload_persists_exact_intervals_with_bins(self):
+        cur = mock.MagicMock()
+        connection = mock.MagicMock()
+        connection.cursor.return_value.__enter__.return_value = cur
+        @contextmanager
+        def connect():
+            yield connection
+        payload = {**self.meta, "days": [{"day": "2026-10-21", "complete": True,
+            "bins": [{"bucket": 36, "app_name": "editor.exe", "seconds": 600}],
+            "intervals": [{"app_name": "editor.exe", "start_second": 33000,
+                           "end_second": 33600}]}]}
+        with mock.patch.object(tracking, "authenticate"), mock.patch.object(db_conn, "connect", connect):
+            response = self.client.post("/api/v1/app-timeline/upload", json=payload)
+        self.assertEqual(response.status_code, 200)
+        inserts = [sql for sql, _ in (c.args for c in cur.executemany.call_args_list)]
+        self.assertTrue(any("app_timeline_bins" in sql for sql in inserts))
+        self.assertTrue(any("app_timeline_intervals" in sql for sql in inserts))
+
     def test_different_token_cannot_reclaim_existing_device(self):
         cur = mock.MagicMock()
         cur.fetchone.side_effect = [{"user_key": self.key}, {"token_hash": tracking.token_hash("a" * 43)}]

@@ -134,14 +134,17 @@ def send_day(user_key, day, email=None, dry_run=False, now=None):
         summary = usage_records.get_range_summary(user_key, start, end)
     else:
         summary = usage_records.get_daily_summary(user_key, day)
-    site_rows, site_hours, site_intervals, readiness = [], [], [], []
+    site_rows, site_hours, site_intervals, app_intervals, readiness = [], [], [], [], []
     if config.MAIL_TRACKING_ENABLED:
         from db import tracking
         range_start, range_end = report.week_range(day) if weekly else (day, day)
         unavailable = set()
         for kind, rows in (("web", site_rows), ("web_hourly", site_hours),
-                           ("web_intervals", site_intervals)):
+                           ("web_intervals", site_intervals),
+                           ("app_intervals", app_intervals)):
             if weekly and kind == "web_intervals":
+                continue
+            if weekly and kind == "app_intervals":
                 continue
             try:
                 rows.extend(tracking.read_range(kind, user_key, range_start, range_end))
@@ -172,13 +175,13 @@ def send_day(user_key, day, email=None, dry_run=False, now=None):
         subject, text, html_body = report.build_weekly_message(day, summary, user)
     else:
         subject, text, html_body = report.build_message(day, summary, user)
-    if config.MAIL_TRACKING_ENABLED and (weekly or site_rows):
+    if config.MAIL_TRACKING_ENABLED:
         from mail.tracking_report import append_sections
         try:
             subject, text, html_body = append_sections(
                 (subject, text, html_body), summary, [], site_rows,
                 range_start, range_end, readiness, site_hours=site_hours,
-                site_intervals=site_intervals)
+                site_intervals=site_intervals, app_intervals=app_intervals)
         except Exception:
             log.warning("附加报告渲染失败，继续发送应用报告", exc_info=True)
     out["subject"] = subject

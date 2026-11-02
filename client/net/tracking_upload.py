@@ -107,9 +107,11 @@ def run_once(force=False):
         for kind in enabled:
             try:
                 watermark = storage.get_setting(f"{kind}_upload_watermark", "")
-                detail_backfill = (kind == "web" and
-                                   (storage.get_setting("web_hourly_backfill_v1", "") != "1" or
-                                    storage.get_setting("web_intervals_backfill_v1", "") != "1"))
+                detail_backfill = ((kind == "web" and
+                                    (storage.get_setting("web_hourly_backfill_v1", "") != "1" or
+                                     storage.get_setting("web_intervals_backfill_v1", "") != "1")) or
+                                   (kind == "timeline" and
+                                    storage.get_setting("app_intervals_backfill_v1", "") != "1"))
                 available = set(storage.get_available_dates()) if kind == "timeline" else set()
                 if kind == "web":
                     with storage._get_conn() as conn:
@@ -137,7 +139,9 @@ def run_once(force=False):
                                  "intervals": site_storage.get_site_intervals_for_date(day)}
                         path = "/web-usage/upload"
                     else:
-                        block = {"day": day, "bins": timeline.build_bins(day), "complete": day < str(today)}
+                        bins, intervals = timeline.build_snapshot(day)
+                        block = {"day": day, "bins": bins, "intervals": intervals,
+                                 "complete": day < str(today)}
                         path = "/app-timeline/upload"
                     pending.append(block)
                     if len(pending) == MAX_DAYS_PER_REQUEST or day == days[-1]:
@@ -147,8 +151,11 @@ def run_once(force=False):
                         storage.set_setting(f"{kind}_upload_watermark", day)
                         pending = []
                 if detail_backfill:
-                    storage.set_setting("web_hourly_backfill_v1", "1")
-                    storage.set_setting("web_intervals_backfill_v1", "1")
+                    if kind == "web":
+                        storage.set_setting("web_hourly_backfill_v1", "1")
+                        storage.set_setting("web_intervals_backfill_v1", "1")
+                    else:
+                        storage.set_setting("app_intervals_backfill_v1", "1")
                 storage.set_setting(f"{kind}_upload_last_success", datetime.now().isoformat(timespec="seconds"))
                 results[kind] = "ok"
             except (UploadFailure, ValueError) as exc:

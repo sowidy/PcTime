@@ -95,6 +95,27 @@ class WeeklyTrackingTests(unittest.TestCase):
         self.assertIn("一周网站使用时长", message[2])
         self.assertNotIn('data-timeline="itinerary"', message[2])
 
+    def test_daily_sender_uses_uploaded_application_intervals_without_sites(self):
+        intervals = [{"day": str(self.start), "app_name": "editor.exe",
+                      "start_second": 32400, "end_second": 34200}]
+        summary = {"total_seconds": 1800, "app_count": 1,
+                   "apps": [{"app_name": "editor.exe", "display_name": "Editor",
+                             "seconds": 1800, "launches": 1}]}
+        def read(kind, *_):
+            return intervals if kind == "app_intervals" else []
+        with mock.patch.multiple(config, MAIL_TRACKING_ENABLED=True), \
+                mock.patch.object(sender.mail_log, "was_mail_sent", return_value=False), \
+                mock.patch.object(sender.mail_log, "record_mail"), \
+                mock.patch.object(sender.usage_records, "get_daily_summary", return_value=summary), \
+                mock.patch.object(sender.users, "get_user", return_value={"hostname": "synthetic"}), \
+                mock.patch.object(tracking, "read_range", side_effect=read) as reads, \
+                mock.patch.object(tracking, "readiness", return_value=[]), \
+                mock.patch.object(sender, "send_mail") as send:
+            result = sender.send_day("test-device", self.start, email="sink@example.invalid")
+        self.assertEqual(result["status"], "sent")
+        reads.assert_any_call("app_intervals", "test-device", self.start, self.start)
+        self.assertIn('data-chart-style="application-gantt"', send.call_args.args[3])
+
 
 if __name__ == "__main__":
     unittest.main()

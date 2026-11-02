@@ -203,7 +203,7 @@ class TestClientExampleFile(unittest.TestCase):
                 self.assertEqual(client_config.RETRY_BACKOFF, 2.0)
                 self.assertEqual(client_config.UPLOAD_CHECK_INTERVAL, 60 * 60)
                 self.assertEqual(client_config.RESEND_RECENT_DAYS, 3)
-                self.assertEqual(client_config.CLIENT_VERSION, "1.0.1")
+                self.assertEqual(client_config.CLIENT_VERSION, "1.0.2")
                 self.assertEqual(client_config.API_PREFIX, "/api/v1")
             finally:
                 # 必须还原：reload 是原地重执行，模块对象还是同一个，

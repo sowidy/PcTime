@@ -172,6 +172,25 @@ class MailChartTests(unittest.TestCase):
                                            self.start, self.end, site_intervals=intervals)
         self.assertNotIn('data-chart-style="website-gantt"', weekly)
 
+    def test_daily_application_gantt_uses_real_intervals_and_remains_optional(self):
+        summary = {"total_seconds": 600, "app_count": 1,
+                   "apps": [{"app_name": "editor.exe", "display_name": "<Editor>",
+                             "seconds": 600, "launches": 1}]}
+        intervals = [{"day": str(self.start), "app_name": "editor.exe",
+                      "start_second": 33000, "end_second": 33600}]
+        message = tracking_report.append_sections(report.build_message(self.start, summary),
+            summary, [], [], self.start, self.start, app_intervals=intervals)
+        self.assertIn('data-chart-style="application-gantt"', message[2])
+        self.assertIn("&lt;Editor&gt;", message[2])
+        Image.open(BytesIO(base64.b64decode(charts.IMAGE_DATA.findall(message[2])[-1]))).verify()
+        missing = tracking_report.append_sections(report.build_message(self.start, summary),
+            summary, [], [], self.start, self.start)
+        self.assertIn("尚未收到完整的软件起止时段", missing[2])
+        self.assertNotIn('data-chart-style="application-gantt"', missing[2])
+        weekly = tracking_report.append_sections(report.build_weekly_message(self.end, summary),
+            summary, [], [], self.start, self.end, app_intervals=intervals)
+        self.assertNotIn('data-chart-style="application-gantt"', weekly[2])
+
     def test_old_timeline_rows_do_not_reappear_in_mail(self):
         bins = [{"day": str(self.start), "bucket": i, "app_name": "a.exe", "seconds": 900}
                 for i in (32, 36, 37, 38, 39)]

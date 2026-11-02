@@ -6,7 +6,8 @@ from db import conn as db_conn
 TABLES = {"web": ("website_usage_records", "host,display_name,seconds"),
           "web_hourly": ("website_hourly_usage", "hour,host,seconds"),
           "web_intervals": ("website_intervals", "host,start_second,end_second"),
-          "timeline": ("app_timeline_bins", "bucket,app_name,seconds")}
+          "timeline": ("app_timeline_bins", "bucket,app_name,seconds"),
+          "app_intervals": ("app_timeline_intervals", "app_name,start_second,end_second")}
 
 
 def replace_day(cur, kind, user_key, day, records, complete=False):

@@ -3,7 +3,7 @@ from collections import defaultdict
 from datetime import timedelta
 import html
 import config
-from mail.charts import website_chart, website_gantt_chart, html_size
+from mail.charts import application_gantt_chart, website_chart, website_gantt_chart, html_size
 
 
 def _site_text(sites, text):
@@ -20,8 +20,8 @@ def _site_text(sites, text):
 
 
 def render(summary, timeline_rows, site_rows, start, end, readiness=(), site_hours=(),
-           site_intervals=()):
-    """Return website sections; legacy timeline_rows is accepted but not rendered."""
+           site_intervals=(), app_intervals=()):
+    """Return daily application spans and website sections."""
     from mail.report import format_duration
     weekly = start != end
     days = [start+timedelta(days=i) for i in range((end-start).days+1)]
@@ -31,6 +31,8 @@ def render(summary, timeline_rows, site_rows, start, end, readiness=(), site_hou
     site_intervals = [r for r in site_intervals if str(r.get("day", start)) in dates]
     complete = {(str(r["day"]), r["kind"]) for r in readiness if r["complete"]}
     text, markup = [], []
+    if not weekly and summary.get("apps"):
+        markup.append(application_gantt_chart(summary, app_intervals, start))
     sites = defaultdict(float)
     for row in site_rows:
         sites[row["host"]] += float(row["seconds"])
@@ -68,16 +70,18 @@ def render(summary, timeline_rows, site_rows, start, end, readiness=(), site_hou
 
 
 def append_sections(message, summary, timeline_rows, site_rows, start, end,
-                    readiness=(), site_hours=(), site_intervals=()):
+                    readiness=(), site_hours=(), site_intervals=(), app_intervals=()):
     subject, text, body = message
     extra_text, extra_html = render(summary, timeline_rows, site_rows, start, end,
-                                   readiness, site_hours, site_intervals)
+                                   readiness, site_hours, site_intervals, app_intervals)
     if not extra_html and not extra_text:
         return message
     if html_size(body + extra_html) > 80000:
         # Keep website charts when a long site list exceeds the HTML budget.
-        extra_html = ((website_gantt_chart(site_rows, site_intervals, start) if start == end else "") +
-                      website_chart(site_rows, start, end, readiness, site_hours) if site_rows else "")
+        extra_html = ((application_gantt_chart(summary, app_intervals, start)
+                       if start == end and summary.get("apps") else "") +
+                      (website_gantt_chart(site_rows, site_intervals, start) if start == end and site_rows else "") +
+                      (website_chart(site_rows, start, end, readiness, site_hours) if site_rows else ""))
     if html_size(body + extra_html) <= 80000:
         if "<!-- tracking-sections -->" in body:
             body = body.replace("<!-- tracking-sections -->", extra_html)

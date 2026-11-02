@@ -82,6 +82,15 @@ class LocalTrackingTests(unittest.TestCase):
                                {"bucket": 37, "app_name": "example.exe", "seconds": 300}])
         self.assertNotIn("secret", json.dumps(bins))
 
+    def test_application_snapshot_preserves_real_switch_times_without_private_fields(self):
+        storage.record_fragment("example.exe", "private window", "C:/private/example.exe",
+                                "2026-10-21T09:10:00", "2026-10-21T09:20:00", 600)
+        bins, intervals = timeline.build_snapshot("2026-10-21")
+        self.assertEqual(sum(row["seconds"] for row in bins), 600)
+        self.assertEqual(intervals, [{"app_name": "example.exe", "start_second": 33000,
+                                      "end_second": 33600}])
+        self.assertNotIn("private", json.dumps(intervals))
+
     def test_overlap_never_double_counts_and_large_error_rejected(self):
         for app in ("first.exe", "second.exe"):
             storage.record_fragment(app, "", "", "2026-10-21T09:00:00", "2026-10-21T09:10:00", 600)
@@ -201,6 +210,18 @@ class ContractTests(unittest.TestCase):
             TimelineDay(day="2026-10-21", bins=[{"bucket": 0, "app_name": "a.exe", "seconds": 900},
                                                  {"bucket": 0, "app_name": "b.exe", "seconds": 20}])
 
+    def test_application_intervals_must_match_bins_and_exclude_window_details(self):
+        day = {"day": "2026-10-21", "bins": [{"bucket": 36, "app_name": "a.exe", "seconds": 600}]}
+        valid = TimelineDay(**day, intervals=[{"app_name": "a.exe", "start_second": 33000,
+                                               "end_second": 33600}])
+        self.assertEqual(valid.intervals[0].start_second, 33000)
+        with self.assertRaises(ValueError):
+            TimelineDay(**day, intervals=[{"app_name": "a.exe", "start_second": 33000,
+                                           "end_second": 33100}])
+        with self.assertRaises(ValueError):
+            TimelineDay(**day, intervals=[{"app_name": "a.exe", "start_second": 33000,
+                                           "end_second": 33600, "window_title": "private"}])
+
     def test_missing_bearer_refused_before_database_access(self):
         from api.tracking import authenticate
         from fastapi import HTTPException
@@ -216,6 +237,7 @@ class ContractTests(unittest.TestCase):
         cur.executemany.assert_not_called()
         self.assertIn("DELETE", cur.execute.call_args_list[0].args[0])
         self.assertIn("tracking_uploads", cur.execute.call_args_list[1].args[0])
+        self.assertTrue(all(len(kind) <= 16 for kind in tracking.TABLES))
 
 
 class TrackingMailTests(unittest.TestCase):

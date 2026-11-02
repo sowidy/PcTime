@@ -447,13 +447,15 @@ def website_category_chart(rows):
             f'<table role="presentation" width="100%" cellpadding="0" cellspacing="0">{legend_rows}</table>')
 
 
-def website_gantt_chart(rows, interval_rows, day):
-    """Daily website sessions on a real time axis; never infer visits from totals."""
+def website_gantt_chart(rows, interval_rows, day, *, key="host", title="网站使用时段",
+                        noun="网站", chart_style="website-gantt", display_names=None):
+    """Daily real intervals on a time axis; never infer spans from totals."""
     from mail.report import format_duration
+    display_names = display_names or {}
     totals = defaultdict(float)
     for row in rows:
         if str(row.get("day", day)) == str(day):
-            totals[str(row["host"])] += float(row["seconds"])
+            totals[str(row[key])] += float(row["seconds"])
     if not totals:
         return ""
     intervals = defaultdict(list)
@@ -461,7 +463,7 @@ def website_gantt_chart(rows, interval_rows, day):
         if str(row.get("day", day)) != str(day):
             continue
         try:
-            host = str(row["host"])
+            host = str(row[key])
             start, end = float(row["start_second"]), float(row["end_second"])
         except (KeyError, TypeError, ValueError):
             continue
@@ -470,8 +472,11 @@ def website_gantt_chart(rows, interval_rows, day):
     if set(intervals) != set(totals) or any(
             abs(sum(end - start for start, end in intervals[host]) - seconds) > max(2, seconds * .001)
             for host, seconds in totals.items()):
-        return ('<h2 style="font-size:18px;color:#34425c;margin:24px 0 8px">网站使用时段</h2>'
-                '<p style="font-size:12px;color:#8592a3">尚未收到完整的网站起止时段；不根据每日总量或每小时汇总推造访问时间。</p>')
+        missing_note = ("尚未收到完整的网站起止时段；不根据每日总量或每小时汇总推造访问时间。"
+                        if key == "host" else
+                        "尚未收到完整的软件起止时段；不根据每日总量或每 15 分钟汇总推造使用时间。")
+        return (f'<h2 style="font-size:18px;color:#34425c;margin:24px 0 8px">{title}</h2>'
+                f'<p style="font-size:12px;color:#8592a3">{missing_note}</p>')
 
     ordered = sorted(totals, key=lambda host: (-totals[host], host))
     visible, hidden = ordered[:24], ordered[24:]
@@ -503,7 +508,10 @@ def website_gantt_chart(rows, interval_rows, day):
     palette = color_map(visible)
     for index, host in enumerate(visible):
         y = top + index * stride
-        label = host if len(host) <= 20 else host[:17] + "..."
+        display_label = display_names.get(host, host)
+        if any(ord(char) > 127 for char in display_label):
+            display_label = host  # Pillow's bundled font has no CJK glyphs; HTML legend has the full label.
+        label = display_label if len(display_label) <= 20 else display_label[:17] + "..."
         draw.text((12, y + 13), label, fill=theme.TEXT, font=font, anchor="lm")
         seconds = totals[host]
         duration = (f"{seconds / 3600:.1f}h" if seconds >= 3600 else
@@ -519,19 +527,29 @@ def website_gantt_chart(rows, interval_rows, day):
     draw.text((left, 29), "TIME OF DAY", fill=theme.MUTED, font=small)
     encoded = base64.b64encode(_encode_png(image)).decode("ascii")
     legend = [f'<td width="50%" valign="top" style="padding:4px 8px;font-size:12px;color:#536176;word-break:break-all">'
-              f'<span style="color:{palette[host]}">●</span> {html.escape(host)} · '
+              f'<span style="color:{palette[host]}">●</span> {html.escape(display_names.get(host, host))} · '
               f'{format_duration(totals[host])}</td>' for host in visible]
     legend_rows = "".join("<tr>" + "".join(legend[i:i+2]) + "</tr>"
                           for i in range(0, len(legend), 2))
-    hidden_note = (f'另有 {len(hidden)} 个网站未在图中逐项显示，共 {format_duration(sum(totals[h] for h in hidden))}。'
+    hidden_note = (f'另有 {len(hidden)} 个{noun}未在图中逐项显示，共 {format_duration(sum(totals[h] for h in hidden))}。'
                    if hidden else "")
-    return (f'<h2 style="font-size:18px;color:{theme.TEXT};margin:24px 0 8px">网站使用时段</h2>'
-            '<p style="font-size:12px;color:#8592a3">横轴为当天时间，纵轴为网站；每段柔色横条对应一次真实使用时段。</p>'
-            f'<img data-chart-style="website-gantt" width="600" height="{height // 2}" '
+    return (f'<h2 style="font-size:18px;color:{theme.TEXT};margin:24px 0 8px">{title}</h2>'
+            f'<p style="font-size:12px;color:#8592a3">横轴为当天时间，纵轴为{noun}；每段柔色横条对应一次真实使用时段。</p>'
+            f'<img data-chart-style="{chart_style}" width="600" height="{height // 2}" '
             f'style="display:block;width:100%;max-width:600px;height:auto" '
-            f'alt="网站使用甘特图，按域名展示真实使用时段" src="data:image/png;base64,{encoded}">'
+            f'alt="{noun}使用甘特图，按名称展示真实使用时段" src="data:image/png;base64,{encoded}">'
             f'<table role="presentation" width="100%" cellpadding="0" cellspacing="0">{legend_rows}</table>'
             f'<p style="font-size:12px;color:#8592a3">{hidden_note}</p>')
+
+
+def application_gantt_chart(summary, interval_rows, day):
+    """Render exact foreground app spans; 15-minute bins are never used as visits."""
+    apps = summary.get("apps") or []
+    rows = [{"day": str(day), "app_name": app["app_name"], "seconds": app["seconds"]}
+            for app in apps if float(app.get("seconds") or 0) > 0]
+    names = {app["app_name"]: app.get("display_name") or app["app_name"] for app in apps}
+    return website_gantt_chart(rows, interval_rows, day, key="app_name", title="软件使用时段",
+                               noun="软件", chart_style="application-gantt", display_names=names)
 
 
 def weekly_website_daily_model(rows, start, end, readiness=()):
