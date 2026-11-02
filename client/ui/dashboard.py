@@ -2323,9 +2323,10 @@ class Dashboard(QWidget):
         source = config.env_file_label()
         if source:
             lines.append(f"配置：{source}")
-        lines.append(f"最近上传：{uploader.last_success_text()}")
+        upload_lines = uploader.upload_status_lines()
+        lines.extend(upload_lines)
         self.lbl_upload_status.setText("\n".join(lines))
-        self.lbl_upload_summary.setText(f"最近上传：{uploader.last_success_text()}")
+        self.lbl_upload_summary.setText("\n".join(upload_lines))
         # 上面是短标签（免得长路径把设置页撑变形），完整路径挂在这里
         self.lbl_upload_status.setToolTip(config.ENV_FILE or "")
 
@@ -2399,7 +2400,7 @@ class Dashboard(QWidget):
         self.btn_upload.setText("上传中…")
         self.lbl_conn.setText("")   # 清掉上一次的连接测试结果，免得看混
         self.lbl_conn.hide()
-        self._start_bg("upload", lambda: uploader.upload_pending(force=True))
+        self._start_bg("upload", lambda: uploader.upload_all(force=True))
 
     def _test_connection(self):
         """点「测试连接」：探一下服务端活着没有（只读，不上传任何数据）。"""

@@ -86,7 +86,7 @@ def render(summary, rows, start, end, readiness=()):
             note = ("本周" if weekly else "当天") + "已完成时间线上传，没有记录到应用使用时段。"
         else:
             note = (("本周" if weekly else "当天") + "尚未收到应用时间线。请在客户端“网站记录”中启用"
-                    "“邮件中加入应用时间线”，并确认自动上传和远程 HTTPS 连接可用。")
+                    "“邮件中加入应用时间线”，并确认已手动上传或开启自动上传，服务端连接可用。")
         return "\n".join(text + [note]), "".join(markup) + f'<p style="font-size:13px;color:#64748b">{note}</p>'
     line = f"已记录 {format_duration(total)} · 有记录 {sum(bool(s) for s in spans_by_day.values())} 天"
     text.append(line)

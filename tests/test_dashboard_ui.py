@@ -193,6 +193,23 @@ class DashboardUiTests(unittest.TestCase):
         self.assertEqual(storage.get_setting("web_upload_enabled", "0"), "0")
         self.assertEqual(storage.get_setting("timeline_upload_enabled", "0"), "0")
 
+    def test_manual_upload_includes_opted_in_website_data(self):
+        from net import uploader
+        window = self.dashboard()
+        with mock.patch.object(window, "_start_bg", side_effect=lambda name, fn: fn()), \
+                mock.patch.object(uploader, "upload_all") as upload:
+            window._upload_now()
+        upload.assert_called_once_with(force=True)
+
+    def test_sync_summary_does_not_hide_website_failure_behind_application_success(self):
+        storage.set_setting("upload_last_success", "2026-11-02 18:52")
+        storage.set_setting("web_upload_enabled", "1")
+        storage.set_setting("web_upload_status", "HTTP 503")
+        window = self.dashboard()
+        summary = window.lbl_upload_summary.text()
+        self.assertIn("应用最近上传：2026-11-02 18:52", summary)
+        self.assertIn("网站上传：服务端暂时无法写入数据", summary)
+
     def test_email_field_has_readable_background_in_both_themes_and_disabled_state(self):
         def luminance(color):
             channels = [color.redF(), color.greenF(), color.blueF()]

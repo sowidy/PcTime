@@ -54,7 +54,7 @@ def render(summary, timeline_rows, site_rows, start, end, readiness=(), site_hou
         title = "一周网站使用时长"
         note = ("本周已完成网站上传，没有记录到网站浏览。" if all((str(d), "web") in complete for d in days) else
                 "本周尚未收到网站记录。请在客户端启用网站统计、连接浏览器扩展，开启“邮件中加入网站图表”，"
-                "并确认自动上传和远程 HTTPS 连接可用。")
+                "并确认已手动上传或开启自动上传，服务端连接可用。")
         text.extend(["", title, note])
         markup.append(f'<h2 style="font-size:18px;color:#334e68;margin-top:28px">{title}</h2>'
                       f'<p style="font-size:13px;color:#64748b">{note}</p>')

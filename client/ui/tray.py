@@ -202,7 +202,7 @@ class TrayApp(QSystemTrayIcon):
         # daemon=True：程序退出时不会因为这个线程而挂住。
         threading.Thread(
             target=self._worker.run,
-            args=("upload", lambda: uploader.upload_pending(force=True)),
+            args=("upload", lambda: uploader.upload_all(force=True)),
             daemon=True,
         ).start()
 

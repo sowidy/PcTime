@@ -135,7 +135,7 @@ def base_url():
 
 
 def secure_server():
-    """新增隐私数据仅经 TLS 或本机回环开发连接传输。"""
+    """供界面标识 HTTPS 或本机回环连接，不限制已启用的 HTTP 上传。"""
     from urllib.parse import urlsplit
     import ipaddress
     parsed = urlsplit(base_url())
@@ -180,7 +180,7 @@ UPLOAD_CHECK_INTERVAL = _env_int("PCTIME_UPLOAD_CHECK_INTERVAL", 60 * 60)
 # 同样是刻意不可配置的：它描述的是「这份 exe 是哪个版本编译出来的」，
 # 是事实而不是偏好。服务端会拿它和 MIN_CLIENT_VERSION 比对，
 # 让用户随手改掉反而会让这个判断失效。
-CLIENT_VERSION = "1.0.0"
+CLIENT_VERSION = "1.0.1"
 
 # 再传一次已经传过的天数（天）。用于容忍「服务端换了库/数据被清了」
 # 这种情况：每次上传会顺带把这几天重传一遍，成本极低但能自愈。

@@ -55,7 +55,7 @@ class WeeklyTrackingTests(unittest.TestCase):
         self.assertNotIn("一周应用时间线", body)
         self.assertIn("一周网站使用时长", body)
         self.assertIn("本周尚未收到网站记录", text)
-        self.assertIn("HTTPS", text)
+        self.assertIn("手动上传或开启自动上传", text)
         self.assertNotIn("网站浏览明细：0", text)
 
     def _send(self, sites=None, bins=None, summary=True, readiness=None):

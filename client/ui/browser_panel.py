@@ -378,7 +378,7 @@ class BrowserSettingsPanel(QWidget):
         for key, title, detail in (
                 ("web_tracking_enabled", "启用本地网站统计", "扩展自动连接，仅统计前台、非隐身网页。"),
                 ("web_export_enabled", "自动导出网站 CSV", "按日、周、月保存独立的网站汇总文件。"),
-                ("web_upload_enabled", "邮件中加入网站图表", "上传域名的每日汇总、真实分时用量和起止时段，需同时开启自动上传。"),
+                ("web_upload_enabled", "邮件中加入网站图表", "允许上传域名汇总、分时用量和起止时段；可立即上传，或开启自动上传。"),
                 ("timeline_upload_enabled", "邮件中加入应用时间线", "允许上传每 15 分钟的软件使用分布，不含窗口标题。")):
             row = QVBoxLayout()
             row.setSpacing(2)
@@ -473,8 +473,12 @@ class BrowserSettingsPanel(QWidget):
         self.status.setText(text)
         self.status.setStyleSheet(f"color:{color};background:{t.BG};border-radius:8px;padding:10px 12px;")
         lines = [bridge.status if bridge else "桥接尚未启动", f"服务端：{config.base_url()}"]
+        if not config.secure_server():
+            lines.append("当前使用 HTTP，传输未加密；可配置 HTTPS 地址启用加密。")
+        from net.tracking_upload import describe_status
         for kind, name in (("web", "网站"), ("timeline", "时间线")):
-            lines.append(f"{name}上传：{storage.get_setting(kind + '_upload_status', '尚未上传')}")
+            status = storage.get_setting(kind + '_upload_status', '尚未上传')
+            lines.append(f"{name}上传：{describe_status(status)}")
         self.diagnostics.setText("\n".join(lines))
 
     def save_ids(self):

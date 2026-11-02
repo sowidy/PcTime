@@ -1,4 +1,4 @@
-"""Independent opt-in uploads. No plaintext remote transport or token logging."""
+"""Independent opt-in uploads to the configured HTTP(S) server; no token logging."""
 from datetime import date, datetime, timedelta
 import json
 import secrets
@@ -10,6 +10,7 @@ import urllib.request
 from core import config, storage, site_storage, timeline
 
 _lock = threading.Lock()
+MAX_DAYS_PER_REQUEST = 7
 
 
 class UploadFailure(Exception):
@@ -51,15 +52,27 @@ def post(path, payload, token):
             time.sleep(min(8, config.RETRY_BACKOFF * (2 ** attempt)))
 
 
-def run_once():
+def describe_status(status):
+    """Translate stored results without confusing application and website uploads."""
+    return {
+        "ok": "上传成功",
+        "disabled": "未上传（上传开关未开启）",
+        "busy": "上传正在进行，请稍后重试",
+        "server_unsupported": "服务端不支持明细上传，请更新服务端",
+        "HTTP 401": "设备认证失败，请检查服务端设备凭据",
+        "HTTP 409": "设备凭据冲突，请联系管理员重置",
+        "HTTP 422": "服务端未接受明细数据，请检查客户端与服务端版本",
+        "HTTP 503": "服务端暂时无法写入数据，请稍后重试",
+        "HTTP network_error": "网络连接失败，请检查服务端地址和连接",
+        "error": "上传发生异常，请重试",
+    }.get(status, status)
+
+
+def run_once(force=False):
     enabled = [kind for kind, key in (("web", "web_upload_enabled"), ("timeline", "timeline_upload_enabled"))
                if storage.get_setting(key, "0") == "1"]
-    if not enabled or storage.get_setting("upload_enabled", "1") != "1":
+    if not enabled or (not force and storage.get_setting("upload_enabled", "1") != "1"):
         return {"reason": "disabled"}
-    if not config.secure_server():
-        for kind in enabled:
-            storage.set_setting(f"{kind}_upload_status", "需要 HTTPS（回环开发地址除外）")
-        return {"reason": "https_required"}
     if not _lock.acquire(blocking=False):
         return {"reason": "busy"}
     try:
@@ -77,7 +90,7 @@ def run_once():
         except UploadFailure as exc:
             for kind in enabled:
                 storage.set_setting(f"{kind}_upload_status", str(exc))
-            return {"reason": str(exc)}
+            return {kind: str(exc) for kind in enabled}
         if storage.get_setting("tracking_server_url", "") != config.base_url():
             for kind in ("web", "timeline"):
                 storage.set_setting(f"{kind}_upload_watermark", "")
@@ -97,7 +110,7 @@ def run_once():
                 detail_backfill = (kind == "web" and
                                    (storage.get_setting("web_hourly_backfill_v1", "") != "1" or
                                     storage.get_setting("web_intervals_backfill_v1", "") != "1"))
-                available = set(storage.get_available_dates())
+                available = set(storage.get_available_dates()) if kind == "timeline" else set()
                 if kind == "web":
                     with storage._get_conn() as conn:
                         available.update(r[0] for r in conn.execute("SELECT DISTINCT date FROM site_usage"))
@@ -108,11 +121,13 @@ def run_once():
                 # Recent dates are explicit snapshots, including empty days to clear stale data.
                 available.update(str(today - timedelta(days=i)) for i in range(3))
                 days = sorted(d for d in available if d <= str(today)
-                              and (not watermark or d >= watermark or d >= str(today - timedelta(days=3))
+                              and (force or not watermark or d >= watermark or d >= str(today - timedelta(days=3))
                                    or detail_backfill and d >= str(today - timedelta(days=13))))
+                pending = []
                 for day in days:
                     key = "web_upload_enabled" if kind == "web" else "timeline_upload_enabled"
-                    if storage.get_setting("upload_enabled", "1") != "1" or storage.get_setting(key, "0") != "1":
+                    if (not force and storage.get_setting("upload_enabled", "1") != "1"
+                            or storage.get_setting(key, "0") != "1"):
                         raise ValueError("disabled")
                     if kind == "web":
                         records = [{"host": r["host"], "display_name": r["display_name"],
@@ -124,8 +139,13 @@ def run_once():
                     else:
                         block = {"day": day, "bins": timeline.build_bins(day), "complete": day < str(today)}
                         path = "/app-timeline/upload"
-                    post(path, {**meta, "days": [block]}, token)
-                    storage.set_setting(f"{kind}_upload_watermark", day)
+                    pending.append(block)
+                    if len(pending) == MAX_DAYS_PER_REQUEST or day == days[-1]:
+                        # A batch is transactional on the server. Advance only after
+                        # acceptance, so failed batches remain eligible for retry.
+                        post(path, {**meta, "days": pending}, token)
+                        storage.set_setting(f"{kind}_upload_watermark", day)
+                        pending = []
                 if detail_backfill:
                     storage.set_setting("web_hourly_backfill_v1", "1")
                     storage.set_setting("web_intervals_backfill_v1", "1")

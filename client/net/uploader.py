@@ -31,8 +31,8 @@
            顺带能自愈「服务端换了库、数据被清了」这种情况）
     重叠部分靠服务端的整块覆盖去掉，重复传不会出错，只会多花一点点流量。
 
-★ 关于隐私：本模块是**唯一**会把数据发到本机之外的代码。默认开启，可以在
-    设置里关掉（upload_enabled=0），关掉后本模块不会产生任何网络请求。
+★ 关于隐私：应用汇总默认开启自动上传；网站和应用时段由 tracking_upload
+    独立控制，默认关闭。自动上传关闭后不在后台联网，手动上传只发送已授权的数据集。
 """
 
 import json
@@ -579,18 +579,51 @@ def describe_subscription(result):
 
 
 def test_connection():
-    """手动「立即上传」用：不管有没有新数据，都把最近几天重传一遍。
+    """兼容旧调用入口：手动同步应用汇总和已授权的明细，并分别报告结果。"""
+    return upload_all(force=True)
 
-    和 upload_pending 的区别只在一点：没有数据可传时它也应该给用户一个
-    明确的反馈（「已经把最近 N 天重新上传了一遍」），而不是无声无息。
-    实际上 pending_days 一定会包含最近几天，所以这两者的行为是一样的 ——
-    test_connection 只是把语义表达清楚，方便界面那边读代码。
+
+def upload_all(force=False):
+    """Upload applications and opted-in details, reporting each outcome independently.
+
+    Explicit manual uploads bypass only the automatic-upload switch. Website and
+    timeline consent switches still apply; one failed dataset does not block others.
     """
-    return upload_pending(force=True)
+    from net import tracking_upload
+    try:
+        applications = upload_pending(force=force)
+    except Exception as exc:
+        applications = {"ok": False, "reason": "error", "days": 0, "apps": 0,
+                        "error": f"{type(exc).__name__}: {exc}"}
+    try:
+        details = tracking_upload.run_once(force=force)
+    except Exception:
+        # Do not expose device tokens or request payloads in exception messages.
+        details = {"reason": "error"}
+        for kind in ("web", "timeline"):
+            if get_setting(f"{kind}_upload_enabled", "0") == "1":
+                set_setting(f"{kind}_upload_status", "error")
+    details_ok = (details.get("reason") == "disabled" or
+                  bool(details) and all(status == "ok" for status in details.values()))
+    return {**applications, "apps_ok": applications["ok"], "apps_reason": applications["reason"],
+            "reason": "partial_upload" if applications["ok"] and not details_ok else applications["reason"],
+            "tracking": details,
+            "ok": applications["ok"] and details_ok}
 
 
 def describe_result(result):
     """把 upload_pending 的返回值翻译成一句给用户看的话。"""
+    if "tracking" in result:
+        from net import tracking_upload
+        applications = {k: v for k, v in result.items() if k != "tracking"}
+        applications["ok"] = result["apps_ok"]
+        applications["reason"] = result.get("apps_reason", result["reason"])
+        lines = ["应用：" + describe_result(applications)]
+        details = result["tracking"]
+        for kind, title in (("web", "网站"), ("timeline", "应用时段")):
+            status = details.get(kind, details.get("reason", "未开启明细上传"))
+            lines.append(f"{title}：{tracking_upload.describe_status(status)}")
+        return "\n".join(lines)
     if result["ok"]:
         if result["reason"] == "no_data":
             return "本机还没有使用记录，没什么可传的"
@@ -608,6 +641,20 @@ def last_success_text():
     """最近一次上传成功的时间，给界面显示；没传过返回「从未上传」。"""
     v = get_setting(_LAST_SUCCESS_KEY) or ""
     return v or "从未上传"
+
+
+def upload_status_lines():
+    """Show independent timestamps and failures in the settings summary."""
+    from net import tracking_upload
+    lines = [f"应用最近上传：{last_success_text()}"]
+    for kind, title in (("web", "网站"), ("timeline", "应用时段")):
+        if get_setting(f"{kind}_upload_enabled", "0") != "1":
+            lines.append(f"{title}上传：未开启")
+            continue
+        status = tracking_upload.describe_status(get_setting(f"{kind}_upload_status", "尚未上传"))
+        stamp = get_setting(f"{kind}_upload_last_success", "")
+        lines.append(f"{title}上传：{status}" + (f" · 最近成功 {stamp}" if stamp else ""))
+    return lines
 
 
 def _now_str():
@@ -673,13 +720,9 @@ class UploadScheduler:
         就静悄悄地死掉，那样以后就再也不上传了，而用户毫无察觉。
         """
         try:
-            self.last_result = upload_pending()
+            self.last_result = upload_all()
         except Exception as e:                   # noqa: BLE001
             self.last_result = {"ok": False, "reason": "error", "days": 0,
                                 "apps": 0, "error": f"{type(e).__name__}: {e}"}
-        try:
-            from net import tracking_upload
-            self.last_tracking_result = tracking_upload.run_once()
-        except Exception as exc:
-            self.last_tracking_result = {"reason": type(exc).__name__}
+        self.last_tracking_result = self.last_result.get("tracking", {})
         return self.last_result
