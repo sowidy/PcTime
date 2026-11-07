@@ -238,6 +238,59 @@ def per_app_overlap_seconds(rows):
             if total - union.get(app, 0.0) > 0}
 
 
+def dedupe_devices_by_label(devices, app_intervals_by_device, device_rows):
+    """Collapse the same physical device registered under several user_keys.
+
+    A fresh install used to mint a random user_key, so reinstalling the app
+    registered the same phone again under the same hostname. The merged mail
+    then listed it twice with identical totals and subtracted the duplicate
+    span as overlap. Devices are grouped by (hostname, platform); each group
+    becomes one breakdown row.
+
+    ``devices`` is the merged ``_devices`` list in device order, each entry
+    with ``label``, ``total_seconds`` and ``app_count``. ``app_intervals_by_device``
+    is the per-device app_intervals rows in the same order, and ``device_rows``
+    the original device dicts (hostname, platform) in the same order.
+
+    Returns ``(deduped_devices, label_day_spans)``. A group's total is its
+    devices' summed totals minus the same-app overlap inside the group, so
+    the headline total does not move when a duplicate collapses. Groups
+    with no data at all are dropped from the breakdown. ``label_day_spans``
+    is one ``{day: [(start, end)]}`` per label, built from that label's union
+    spans, for measuring overlap only across different labels.
+    """
+    groups = {}
+    order = []
+    for index, row in enumerate(device_rows):
+        key = (row.get("hostname") or "", row.get("platform") or "")
+        if key not in groups:
+            groups[key] = []
+            order.append(key)
+        groups[key].append(index)
+    deduped = []
+    label_day_spans = []
+    for key in order:
+        indices = groups[key]
+        rows = []
+        for index in indices:
+            rows.extend(app_intervals_by_device[index] or [])
+        total = round(
+            sum(float(devices[index].get("total_seconds") or 0) for index in indices)
+            - sum(per_app_overlap_seconds(rows).values()), 1)
+        apps = {row.get("app_name") for row in rows if row.get("app_name")}
+        if total <= 0 and not rows:
+            continue
+        label = devices[indices[0]].get("label") or key[0] or "未知设备"
+        deduped.append({"label": label, "total_seconds": total,
+                        "app_count": len(apps)})
+        spans = {}
+        for row in union_intervals_by_app(rows):
+            spans.setdefault(str(row.get("day")), []).append(
+                (float(row["start_second"]), float(row["end_second"])))
+        label_day_spans.append(spans)
+    return deduped, label_day_spans
+
+
 def union_bins_from_intervals(union_intervals):
     """Split union intervals into 15-minute bins (bucket = second // 900).
 

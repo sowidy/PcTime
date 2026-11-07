@@ -16,14 +16,16 @@ from mail import merge, report, sender
 
 U_PC = "11111111-1111-4111-8111-111111111111"
 U_PHONE = "22222222-2222-4222-8222-222222222222"
+U_PHONE2 = "33333333-3333-4333-8333-333333333333"
 MAIL = "User@Example.com "
 DAY = date(2026, 11, 6)  # Friday: daily mail, not the weekly day
 SUNDAY = date(2026, 10, 18)
 
 
-def device(key, email=MAIL, hostname="PC", created="2026-01-01 00:00:00"):
+def device(key, email=MAIL, hostname="PC", created="2026-01-01 00:00:00",
+           platform="Windows"):
     return {"user_key": key, "email": email, "hostname": hostname,
-            "platform": "Windows", "created_at": created}
+            "platform": platform, "created_at": created}
 
 
 def summary(total, apps):
@@ -333,7 +335,7 @@ class TestSendMergedDay(MergedMailTestCase):
         self._summaries()
         # PC 0-3600, phone 1800-3600: 1800s overlap; merged = 3600+1800-1800.
         self._intervals([(0, 3600)], [(1800, 3600)])
-        devices = [device(U_PHONE, created="2026-01-01 00:00:00"),
+        devices = [device(U_PHONE, hostname="Pixel 8", platform="Android 14", created="2026-01-01 00:00:00"),
                    device(U_PC, created="2026-01-02 00:00:00")]
         outcome = sender.send_merged_day(devices, DAY, MAIL)
         self.assertEqual(outcome["status"], "sent")
@@ -355,7 +357,7 @@ class TestSendMergedDay(MergedMailTestCase):
         self._summaries()
         self._intervals([(0, 1800)], [(3600, 5400)])
         outcome = sender.send_merged_day(
-            [device(U_PC), device(U_PHONE)], DAY, MAIL)
+            [device(U_PC), device(U_PHONE, hostname="Pixel 8", platform="Android 14")], DAY, MAIL)
         _, _, text, _ = self.send_mail.call_args[0]
         self.assertEqual(outcome["status"], "sent")
         self.assertNotIn("双设备重叠", text)
@@ -364,7 +366,7 @@ class TestSendMergedDay(MergedMailTestCase):
         self._summaries()
         self._intervals([(0, 3600)], [(1800, 3600)])
         outcome = sender.send_merged_day(
-            [device(U_PC), device(U_PHONE)], DAY, MAIL, dry_run=True)
+            [device(U_PC), device(U_PHONE, hostname="Pixel 8", platform="Android 14")], DAY, MAIL, dry_run=True)
         self.assertEqual(outcome["status"], "skipped")
         self.assertEqual(outcome["reason"], "dry_run")
         self.send_mail.assert_not_called()
@@ -374,7 +376,7 @@ class TestSendMergedDay(MergedMailTestCase):
         self._summaries()
         self.was_sent.return_value = True
         outcome = sender.send_merged_day(
-            [device(U_PC), device(U_PHONE)], DAY, MAIL)
+            [device(U_PC), device(U_PHONE, hostname="Pixel 8", platform="Android 14")], DAY, MAIL)
         self.assertEqual(outcome["status"], "skipped")
         self.assertEqual(outcome["reason"], "already_sent")
         self.send_mail.assert_not_called()
@@ -382,7 +384,7 @@ class TestSendMergedDay(MergedMailTestCase):
     def test_no_data_on_any_device_skips(self):
         self.get_summary.return_value = None
         outcome = sender.send_merged_day(
-            [device(U_PC), device(U_PHONE)], DAY, MAIL)
+            [device(U_PC), device(U_PHONE, hostname="Pixel 8", platform="Android 14")], DAY, MAIL)
         self.assertEqual(outcome["status"], "skipped")
         self.assertEqual(outcome["reason"], "no_data")
         self.send_mail.assert_not_called()
@@ -410,7 +412,7 @@ class TestSendMergedDay(MergedMailTestCase):
             return []
         self.read_range.side_effect = read_range
         outcome = sender.send_merged_day(
-            [device(U_PC), device(U_PHONE)], DAY, MAIL)
+            [device(U_PC), device(U_PHONE, hostname="Pixel 8", platform="Android 14")], DAY, MAIL)
         self.assertEqual(outcome["status"], "sent")
         _, _, text, html_body = self.send_mail.call_args[0]
         self.assertIn("双设备重叠", text)
@@ -429,6 +431,61 @@ class TestSendMergedDay(MergedMailTestCase):
         self.assertNotIn("data:image/png", html_body)
         self.assertIn("尚未收到完整的软件起止时段", html_body)
 
+    def test_same_device_registered_twice_shows_once(self):
+        # Regression: reinstalling the app minted a fresh random user_key,
+        # so the same phone appeared twice with identical totals. The mail
+        # must list it once, and the headline total must not move: the
+        # duplicate span is collapsed inside the label, not subtracted
+        # again as cross-device overlap.
+        def daily(key, day):
+            if key == U_PC:
+                return summary(3600, [app_row("wechat", 2000, 5),
+                                      app_row("chrome.exe", 1600, 3)])
+            return summary(1800, [app_row("wechat", 1200, 9),
+                                  app_row("douyin", 600, 2)])
+        self.get_summary.side_effect = daily
+
+        def read_range(kind, key, start, end):
+            # Spans are disjoint per device (one foreground app at a time),
+            # matching the summaries above.
+            spans = {"wechat": (0, 2000) if key == U_PC else (1800, 3000),
+                     "douyin": (3600, 4200),
+                     "chrome.exe": (2000, 3600)}
+            if kind == "app_intervals":
+                apps = ["wechat", "chrome.exe"] if key == U_PC else ["wechat", "douyin"]
+                return [{"day": str(DAY), "app_name": app,
+                         "start_second": spans[app][0], "end_second": spans[app][1]}
+                        for app in apps]
+            if kind == "timeline":
+                return []
+            return []
+        self.read_range.side_effect = read_range
+        devices = [device(U_PC, created="2026-01-01 00:00:00"),
+                   device(U_PHONE, hostname="Pixel 8", platform="Android 14",
+                          created="2026-01-02 00:00:00"),
+                   device(U_PHONE2, hostname="Pixel 8", platform="Android 14",
+                          created="2026-01-03 00:00:00")]
+        outcome = sender.send_merged_day(devices, DAY, MAIL)
+        self.assertEqual(outcome["status"], "sent")
+        _, subject, text, _ = self.send_mail.call_args[0]
+        # PC 3600 + phone 1800 - PC/phone wechat overlap 1200 = 4200s.
+        self.assertIn("1 小时 10 分", subject)
+        self.assertEqual(text.count("Pixel 8"), 1)
+        self.assertIn("双设备重叠：20 分", text)
+
+    def test_device_with_no_data_drops_from_breakdown(self):
+        self.get_summary.side_effect = lambda key, day: (
+            summary(3600, [app_row("wechat", 3600)]) if key == U_PC else None)
+        self._intervals([(0, 3600)], [])
+        outcome = sender.send_merged_day(
+            [device(U_PC),
+             device(U_PHONE, hostname="Pixel 8", platform="Android 14")],
+            DAY, MAIL)
+        self.assertEqual(outcome["status"], "sent")
+        _, _, text, _ = self.send_mail.call_args[0]
+        self.assertNotIn("Pixel 8", text)
+        self.assertNotIn("分设备", text)
+
 
 class TestRunGroupsByMailbox(MergedMailTestCase):
     def setUp(self):
@@ -443,7 +500,7 @@ class TestRunGroupsByMailbox(MergedMailTestCase):
         self._intervals([(0, 3600)], [(1800, 3600)])
         self.get_subscribers.return_value = [
             device(U_PC, created="2026-01-02 00:00:00"),
-            device(U_PHONE, created="2026-01-01 00:00:00")]
+            device(U_PHONE, hostname="Pixel 8", platform="Android 14", created="2026-01-01 00:00:00")]
         result = sender.run(day=DAY)
         self.assertEqual(result["sent"], 1)
         self.assertEqual(len(result["results"]), 1)
@@ -489,7 +546,7 @@ class TestRunGroupsByMailbox(MergedMailTestCase):
         self.read_range.side_effect = read_range
         self.get_subscribers.return_value = [
             device(U_PC, created="2026-01-02 00:00:00"),
-            device(U_PHONE, created="2026-01-01 00:00:00")]
+            device(U_PHONE, hostname="Pixel 8", platform="Android 14", created="2026-01-01 00:00:00")]
         result = sender.run(day=SUNDAY)
         self.assertEqual(result["sent"], 1)
         _, subject, text, _ = self.send_mail.call_args[0]

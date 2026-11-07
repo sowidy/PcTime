@@ -248,9 +248,9 @@ def send_merged_day(devices, day, email, dry_run=False, now=None):
     named_summaries = []
     site_rows, site_hours, site_intervals = [], [], []
     app_intervals, timeline_rows, readiness = [], [], []
-    # Per-device intervals grouped by day: overlap is same-second *and*
-    # same-day, so weekly mail must never compare seconds across days.
-    per_device_intervals = []
+    # Per-device app intervals, kept per device (not flattened) so the merged
+    # mail can collapse the same physical device registered twice.
+    app_intervals_by_device = []
     for device in devices:
         key = device["user_key"]
         if weekly:
@@ -273,12 +273,7 @@ def send_merged_day(devices, day, email, dry_run=False, now=None):
                 readiness.extend(tracking.readiness(key, range_start, range_end))
             except Exception:
                 log.warning("合并报告 %s 数据不可用，继续生成其他报告内容", key, exc_info=True)
-        by_day = {}
-        for row in device_intervals:
-            if str(row.get("day", day)) in range_days:
-                by_day.setdefault(str(row.get("day", day)), []).append(
-                    (row["start_second"], row["end_second"]))
-        per_device_intervals.append(by_day)
+        app_intervals_by_device.append(device_intervals)
     merged = mail_merge.merge_app_summaries(named_summaries)
     app_summary_missing = merged is None
     if merged is None and site_rows:
@@ -306,9 +301,14 @@ def send_merged_day(devices, day, email, dry_run=False, now=None):
         merged["daily_apps"] = mail_merge.daily_apps_from_bins(union_bins)
         merged["days_with_data"] = len({str(r["day"]) for r in union_bins})
     overlap = 0.0
+    # Same physical device, registered twice, is one label: its own duplicate
+    # span is not overlap, and a device with no data that day drops out.
+    # Overlap is measured only across different labels, per day.
+    merged["_devices"], label_day_spans = mail_merge.dedupe_devices_by_label(
+        merged["_devices"], app_intervals_by_device, devices)
     for day_key in range_days:
         overlap += mail_merge.compute_overlap_seconds(
-            [per_device.get(day_key, []) for per_device in per_device_intervals])
+            [spans.get(day_key, []) for spans in label_day_spans])
     merged["_overlap_seconds"] = round(overlap, 1)
     merged["total_seconds"] = round(
         sum(float(d["total_seconds"]) for d in merged["_devices"]) - overlap, 1)
