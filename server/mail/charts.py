@@ -653,12 +653,15 @@ def website_gantt_chart(rows, interval_rows, day, *, key="host", title="网站�
         y = top + index * stride
         if index % 2 == 0:
             draw.rounded_rectangle((4, y - 3, 1182, y + 29), radius=6, fill="#F5F8FC")
-    step = 1 if right_hour - left_hour <= 10 else 2 if right_hour - left_hour <= 18 else 3
+    step = 1  # One tick per hour; the label font shrinks when a full day
+    # leaves only ~37px per hour, so adjacent "HH:00" labels never overlap.
+    hour_font = small if (right - left) / max(1, right_hour - left_hour) >= 46 \
+        else ImageFont.load_default(size=14)
     for hour in range(left_hour, right_hour + 1):
         if hour == left_hour or hour == right_hour or hour % step == 0:
             pos = round(x(hour * 3600))
             draw.line((pos, top - 12, pos, bottom + 4), fill=theme.GRID, width=2)
-            draw.text((pos, bottom + 16), f"{hour:02d}:00", fill=theme.AXIS, font=small, anchor="mt")
+            draw.text((pos, bottom + 16), f"{hour:02d}:00", fill=theme.AXIS, font=hour_font, anchor="mt")
     palette = color_map(visible)
 
     def label_parts(host):
