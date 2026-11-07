@@ -559,10 +559,19 @@ def daily_winner_timeline(summary, app_intervals, site_intervals, day):
                     items.append(((block_left + block_right) / 2, site_label, False))
         else:
             items.append((center, label, index % 2 == 0))
-    for assigned in _assign_label_rows(items, label_font):
-        if assigned is None:
-            continue  # Fits nowhere: skip it rather than overlap a neighbor.
-        label, row_y, center = assigned
+    # Leader lines tie each name to its block; drawn first so the label's
+    # white chip covers the line where it passes behind another name.
+    assignments = [a for a in _assign_label_rows(items, label_font) if a is not None]
+    for label, row_y, center in assignments:
+        if row_y < 66:
+            draw.line((center, row_y + 9, center, 66), fill="#C9D2DE", width=2)
+        else:
+            draw.line((center, 102, center, row_y - 9), fill="#C9D2DE", width=2)
+    for label, row_y, center in assignments:
+        width = label_font.getlength(label)
+        draw.rectangle((center - width / 2 - 3, row_y - 9,
+                        center + width / 2 + 3, row_y + 9),
+                       fill=theme.BACKGROUND)
         draw.text((center, row_y), label, fill=theme.TEXT,
                   font=label_font, anchor="mm")
     encoded = base64.b64encode(_encode_png(image)).decode("ascii")

@@ -718,6 +718,41 @@ class TestWinnerTimeline(unittest.TestCase):
         self.assertGreaterEqual(len(rows_used), 3)
         self.assertEqual(_fit_label("Chrome 浏览器", font), "Chrome 浏览器")
 
+    def test_leader_lines_connect_labels_to_blocks(self):
+        # Each row label gets a thin vertical leader down/up to its block,
+        # so a name is never left floating detached from its segment.
+        import base64
+        import io
+        import re
+        from PIL import Image
+        from mail.charts import daily_winner_timeline
+        summary = {"apps": [
+            {"app_name": "chrome.exe", "display_name": "Chrome 浏览器", "seconds": 4800},
+            {"app_name": "weixin.exe", "display_name": "微信", "seconds": 7200},
+            {"app_name": "douyin.exe", "display_name": "抖音", "seconds": 7200}]}
+        app_intervals = [
+            {"day": str(DAY), "app_name": "chrome.exe", "start_second": 32400, "end_second": 34200},
+            {"day": str(DAY), "app_name": "chrome.exe", "start_second": 36000, "end_second": 39600},
+            {"day": str(DAY), "app_name": "weixin.exe", "start_second": 32400, "end_second": 36000},
+            {"day": str(DAY), "app_name": "weixin.exe", "start_second": 34200, "end_second": 37800},
+            {"day": str(DAY), "app_name": "douyin.exe", "start_second": 75600, "end_second": 82800},
+        ]
+        site_intervals = [
+            {"day": str(DAY), "host": "douyin.com", "start_second": 37800, "end_second": 39000},
+            {"day": str(DAY), "host": "chatgpt.com", "start_second": 39000, "end_second": 39600},
+        ]
+        html_body = daily_winner_timeline(summary, app_intervals, site_intervals, DAY)
+        match = re.search(r"data:image/png;base64,([A-Za-z0-9+/=]+)", html_body)
+        self.assertIsNotNone(match)
+        image = Image.open(io.BytesIO(base64.b64decode(match.group(1)))).convert("RGB")
+        leader = (201, 210, 222)  # #C9D2DE
+        above = any(image.getpixel((x, y)) == leader
+                    for x in range(image.width) for y in range(40, 64))
+        below = any(image.getpixel((x, y)) == leader
+                    for x in range(image.width) for y in range(104, 118))
+        self.assertTrue(above)
+        self.assertTrue(below)
+
     def test_timeline_empty_day(self):
         from mail.charts import daily_winner_timeline, timeline_segments
         self.assertEqual(timeline_segments({"apps": []}, [], [], DAY), ([], 0, 0))
