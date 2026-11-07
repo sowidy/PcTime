@@ -13,7 +13,7 @@ from PIL import Image
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import config
 from db import usage_records
-from mail import charts, colors, report, sender, site_names, tracking_report
+from mail import charts, colors, report, sender, site_categories, site_names, tracking_report
 
 
 class MailChartTests(unittest.TestCase):
@@ -221,6 +221,22 @@ class MailChartTests(unittest.TestCase):
         self.assertIn("未收到：10-22", body)
         self.assertEqual(len(charts.IMAGE_DATA.findall(body)), 1)
 
+    def test_website_stack_only_groups_a_short_small_tail(self):
+        meaningful = [{"day": str(self.start), "host": f"site-{index:02d}.example", "seconds": 120}
+                      for index in range(36)]
+        tiny = [{"day": str(self.start), "host": f"tiny-{index:02d}.example", "seconds": 1}
+                for index in range(10)]
+        self.assertEqual(charts.website_series_limit(meaningful + tiny), 36)
+        body = charts.weekly_website_stacked_chart(meaningful + tiny, self.start, self.end)
+        self.assertIn("site-35.example", body)
+        self.assertIn("其他（10 网站）", body)
+        self.assertEqual(charts.website_series_limit(meaningful + [
+            {"day": str(self.start), "host": f"more-{index:02d}.example", "seconds": 120}
+            for index in range(14)]), 50)
+        self.assertEqual(site_categories.classify("docs.qq.com"), "工作学习")
+        self.assertEqual(site_categories.classify("21st.dev"), "工作学习")
+        self.assertEqual(site_categories.classify("mail.proton.me"), "工具类")
+
     def test_category_pie_uses_separated_flat_slices_and_legend_above(self):
         hosts = ("x.com", "youtube.com", "github.com", "bbc.com",
                  "taobao.com", "google.com", "unknown.example")
@@ -234,6 +250,8 @@ class MailChartTests(unittest.TestCase):
         for color in charts.PIE_PALETTE:
             self.assertIn(bytes.fromhex(color[1:]), pixels)
         self.assertIn(b"\xff\xff\xff", pixels)  # White gutters separate the slices.
+        self.assertIn(bytes.fromhex(charts.theme.TEXT[1:]), pixels)  # Percentage text is in the pie.
+        self.assertNotIn("社交媒体：", body)  # The legend only carries names and durations.
 
     def test_daily_gantt_uses_only_real_complete_intervals(self):
         sites = [{"day": str(self.start), "host": "github.com", "seconds": 900}]
@@ -254,6 +272,26 @@ class MailChartTests(unittest.TestCase):
         _, weekly = tracking_report.render({"total_seconds": 900, "apps": []}, [], sites,
                                            self.start, self.end, site_intervals=intervals)
         self.assertNotIn('data-chart-style="website-gantt"', weekly)
+
+    def test_website_gantt_only_omits_hosts_below_one_minute(self):
+        rows = [{"day": str(self.start), "host": f"regular-{index:02d}.example", "seconds": 60}
+                for index in range(30)]
+        rows += [{"day": str(self.start), "host": f"short-{index:02d}.example", "seconds": 59}
+                 for index in range(10)]
+        intervals = [{"day": str(self.start), "host": row["host"],
+                      "start_second": 32400 + index * 65,
+                      "end_second": 32400 + index * 65 + row["seconds"]}
+                     for index, row in enumerate(rows[:30])]
+        body = charts.website_gantt_chart(rows, intervals, self.start)
+        self.assertIn('data-chart-style="website-gantt"', body)
+        self.assertIn("regular-29.example", body)  # No former top-24 truncation.
+        self.assertNotIn("short-00.example", body)
+        self.assertIn("另有 10 个网站用时不足 1 分钟未展示", body)
+        image = Image.open(BytesIO(base64.b64decode(charts.IMAGE_DATA.search(body).group(1))))
+        self.assertEqual(image.size[0], 1200)
+        only_short = charts.website_gantt_chart(rows[30:], [], self.start)
+        self.assertNotIn('data-chart-style="website-gantt"', only_short)
+        self.assertIn("均不足 1 分钟", only_short)
 
     def test_known_site_names_are_display_only_and_unknown_hosts_stay_distinct(self):
         self.assertEqual(site_names.names_for_hosts(["github.com", "www.douyin.com", "unknown.example"]),

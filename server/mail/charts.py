@@ -31,6 +31,7 @@ STACK_PALETTE = ("#5D7FB0", "#D18B56", "#589C7B", "#9C78AF",
 # legible on the report's white background instead of copying its black canvas.
 PIE_PALETTE = ("#6FA8E8", "#E9BA50", "#48B9A9", "#A88BDC",
                "#D4869D", "#72AEC4", "#9AA8BA")
+SITE_CHART_MAX_SERIES = 80
 
 
 def stack_color_map(keys):
@@ -60,6 +61,29 @@ def prepare(labels, buckets, observed, limit=8):
                       if present else None)
     return {"labels": labels, "series": series, "values": values, "totals": totals,
             "hidden": hidden, "colors": stack_color_map(series)}
+
+
+def website_series_limit(rows, *, weekly=False):
+    """Keep meaningful hosts visible; aggregate only a small short-duration tail.
+
+    The app chart keeps MAIL_CHART_SERIES as its cap. For website charts that
+    number is a minimum, otherwise a fixed top-eight can hide most browsing.
+    """
+    totals = defaultdict(float)
+    for row in rows:
+        totals[str(row["host"])] += max(0.0, float(row["seconds"]))
+    durations = sorted((value for value in totals.values() if value > 0), reverse=True)
+    total = sum(durations)
+    remaining = total
+    minimum = max(1, config.MAIL_CHART_SERIES)
+    tiny_seconds = 120 if weekly else 60
+    for index, seconds in enumerate(durations):
+        if (index >= minimum and remaining <= total * .05 and seconds < tiny_seconds):
+            return index
+        remaining -= seconds
+        if index + 1 >= SITE_CHART_MAX_SERIES:
+            return SITE_CHART_MAX_SERIES
+    return max(1, len(durations))
 
 
 def smooth_line(points, steps=16):
@@ -445,6 +469,7 @@ def website_category_chart(rows):
     angle = -90.0
     colors = {name: PIE_PALETTE[index] for index, (name, _) in enumerate(CATEGORIES)}
     separated = len(totals) > 1
+    inside_labels, outside_labels = [], []
     for name, seconds in totals.items():
         sweep = seconds / total * 360
         middle = math.radians(angle + sweep / 2)
@@ -457,12 +482,41 @@ def website_category_chart(rows):
                             (center_x-radius, center_y-radius,
                              center_x+radius, center_y+radius)),
                       angle + inset, angle + sweep - inset, fill=colors[name])
+        share = seconds / total
+        label = f"{share:.0%}" if share >= .01 else f"{share:.1%}"
+        if share >= .08:
+            inside_labels.append((center_x + radius * .62 * math.cos(middle),
+                                  center_y + radius * .62 * math.sin(middle), label))
+        else:
+            side = 1 if math.cos(middle) >= 0 else -1
+            outside_labels.append((side, center_x + radius * .98 * math.cos(middle),
+                                   center_y + radius * .98 * math.sin(middle),
+                                   max(24, min(376, 200 + 198 * math.sin(middle))),
+                                   label, colors[name]))
         angle += sweep
+    font = ImageFont.load_default(size=24 * scale)
+    for x, y, label in inside_labels:
+        draw.text((round(x * scale), round(y * scale)), label,
+                  fill=theme.TEXT, font=font, anchor="mm")
+    for side in (-1, 1):
+        placed = 0
+        for _, edge_x, edge_y, wanted_y, label, color in sorted(
+                (entry for entry in outside_labels if entry[0] == side),
+                key=lambda entry: entry[3]):
+            y = max(wanted_y, placed + 26) if placed else wanted_y
+            y = min(376, y)
+            placed = y
+            x = 82 if side < 0 else 518
+            draw.line(((round(edge_x * scale), round(edge_y * scale)),
+                       (round((x - side * 26) * scale), round(y * scale))),
+                      fill=color, width=2 * scale)
+            draw.text((x * scale, round(y * scale)), label,
+                      fill=theme.TEXT, font=font, anchor="mm")
     image = image.resize((600, 400), Image.Resampling.LANCZOS)
     encoded = base64.b64encode(_encode_png(image)).decode("ascii")
     legend = [
         f'<td width="50%" valign="top" style="padding:4px 8px;font-size:12px;color:#536176">'
-        f'<span style="color:{colors[name]}">●</span> {html.escape(name)}：{seconds / total:.0%} · '
+        f'<span style="color:{colors[name]}">●</span> {html.escape(name)} · '
         f'{format_duration(seconds)}</td>' for name, seconds in totals.items()]
     legend_rows = "".join('<tr>' + "".join(legend[i:i+2]) + '</tr>'
                           for i in range(0, len(legend), 2))
@@ -479,7 +533,7 @@ def website_category_chart(rows):
 
 def website_gantt_chart(rows, interval_rows, day, *, key="host", title="网站使用时段",
                         noun="网站", chart_style="website-gantt", display_names=None,
-                        min_seconds=0, max_visible=24):
+                        min_seconds=60, max_visible=None):
     """Daily real intervals on a time axis; never infer spans from totals."""
     from mail.report import format_duration
     display_names = display_names or (site_names_for_rows(rows) if key == "host" else {})
@@ -490,6 +544,14 @@ def website_gantt_chart(rows, interval_rows, day, *, key="host", title="网站�
             totals[str(row[key])] += float(row["seconds"])
     if not totals:
         return ""
+    ordered = sorted(totals, key=lambda name: (-totals[name], name))
+    eligible = [name for name in ordered if totals[name] >= min_seconds]
+    if key == "host" and not eligible:
+        return (f'<h2 style="font-size:18px;color:{theme.TEXT};margin:24px 0 8px">{title}</h2>'
+                '<p style="font-size:12px;color:#8592a3">当天网站用时均不足 1 分钟，'
+                '已计入网站总时长，时段图不展示。</p>')
+    # Website rows are not capped: only hosts below one minute are omitted.
+    visible = eligible if key == "host" else (eligible[:max_visible] or ordered[:1])
     intervals = defaultdict(list)
     for row in interval_rows:
         if str(row.get("day", day)) != str(day):
@@ -501,18 +563,18 @@ def website_gantt_chart(rows, interval_rows, day, *, key="host", title="网站�
             continue
         if host in totals and math.isfinite(start) and math.isfinite(end) and 0 <= start < end <= 86400:
             intervals[host].append((start, end))
-    if set(intervals) != set(totals) or any(
-            abs(sum(end - start for start, end in intervals[host]) - seconds) > max(2, seconds * .001)
-            for host, seconds in totals.items()):
+    required = visible if key == "host" else ordered
+    if (key != "host" and set(intervals) != set(totals)) or any(
+            host not in intervals or
+            abs(sum(end - start for start, end in intervals[host]) - totals[host]) >
+            max(2, totals[host] * .001)
+            for host in required):
         missing_note = ("尚未收到完整的网站起止时段；不根据每日总量或每小时汇总推造访问时间。"
                         if key == "host" else
                         "尚未收到完整的软件起止时段；不根据每日总量或每 15 分钟汇总推造使用时间。")
         return (f'<h2 style="font-size:18px;color:#34425c;margin:24px 0 8px">{title}</h2>'
                 f'<p style="font-size:12px;color:#8592a3">{missing_note}</p>')
 
-    ordered = sorted(totals, key=lambda host: (-totals[host], host))
-    eligible = [name for name in ordered if totals[name] >= min_seconds]
-    visible = eligible[:max_visible] or ordered[:1]
     visible_set = set(visible)
     hidden = [name for name in ordered if name not in visible_set]
     earliest = min(start for host in visible for start, _ in intervals[host])
@@ -566,8 +628,8 @@ def website_gantt_chart(rows, interval_rows, day, *, key="host", title="网站�
               f'{format_duration(totals[host])}</td>' for host in visible]
     legend_rows = "".join("<tr>" + "".join(legend[i:i+2]) + "</tr>"
                           for i in range(0, len(legend), 2))
-    threshold_note = "（含用时不足 1 分钟的项目）" if min_seconds == 60 else ""
-    hidden_note = (f'另有 {len(hidden)} 个{noun}{threshold_note}未展示 · '
+    hidden_note = (f'另有 {len(hidden)} 个{noun}'
+                   f'{"用时不足 1 分钟" if key == "host" else ""}未展示 · '
                    f'合计 {format_duration(sum(totals[h] for h in hidden))}（已计入总时长）'
                    if hidden else "")
     hidden_html = f'<p style="font-size:12px;color:#8592a3">{hidden_note}</p>' if hidden_note else ""
@@ -609,9 +671,7 @@ def weekly_website_daily_model(rows, start, end, readiness=()):
 
 def weekly_website_stacked_chart(rows, start, end, readiness=()):
     days, buckets, observed = weekly_website_daily_model(rows, start, end, readiness)
-    limit = max(1, min(12, config.MAIL_CHART_SERIES))
-    if config.MAIL_MAX_SITES > 0:
-        limit = min(limit, config.MAIL_MAX_SITES)
+    limit = website_series_limit(rows, weekly=True)
     return render([day.strftime("%m-%d") for day in days], buckets, observed,
                   site_names_for_rows(rows),
                   "一周网站每日使用时长", "",
@@ -628,9 +688,7 @@ def website_chart(rows, start, end, readiness=(), hourly_rows=()):
                  '<p style="font-size:12px;color:#8592a3">分时记录未收到，不推算每小时用量。</p>')
     else:
         buckets = hours[0]
-        limit = max(1, min(12, config.MAIL_CHART_SERIES))
-        if config.MAIL_MAX_SITES > 0:
-            limit = min(limit, config.MAIL_MAX_SITES)
+        limit = website_series_limit(rows)
         chart = render([f"{hour:02d}:00" for hour in range(24)], buckets, [True] * 24,
                        site_names_for_rows(rows),
                        "每小时网站使用", "",

@@ -275,7 +275,7 @@ MAIL_CATCHUP_DAYS = int(_env("PCTIME_MAIL_CATCHUP_DAYS", "2"))
 #    会被 was_mail_sent 挡掉、发不出去。真要改就在两次发送之间改。
 MAIL_WEEKLY_DAY = int(_env("PCTIME_MAIL_WEEKLY_DAY", "6"))
 
-# 纯文本备用版本的明细上限；图表另按 MAIL_CHART_SERIES 合并为“其他”。
+# 纯文本备用版本的网站明细上限；网站图表按时长动态展开。
 MAIL_MAX_APPS = int(_env("PCTIME_MAIL_MAX_APPS", "60"))
 MAIL_MAX_SITES = int(_env("PCTIME_MAIL_MAX_SITES", "40"))
 # Largest categories shown separately in stacked charts; remaining time is Other.

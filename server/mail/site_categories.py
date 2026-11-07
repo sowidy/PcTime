@@ -16,12 +16,13 @@ _RULES = (
     ("视频娱乐", ("youtube.com", "youtu.be", "bilibili.com", "douyin.com", "tiktok.com",
                   "netflix.com", "twitch.tv", "iqiyi.com", "youku.com")),
     ("工作学习", ("github.com", "gitlab.com", "stackoverflow.com", "notion.so",
-                  "figma.com", "coursera.org", "wikipedia.org", "docs.google.com")),
+                  "figma.com", "coursera.org", "wikipedia.org", "docs.google.com",
+                  "docs.qq.com", "21st.dev")),
     ("新闻资讯", ("bbc.com", "cnn.com", "nytimes.com", "reuters.com", "thepaper.cn",
                   "news.google.com", "news.qq.com")),
     ("购物", ("taobao.com", "tmall.com", "jd.com", "amazon.com", "ebay.com")),
     ("工具类", ("chatgpt.com", "openai.com", "google.com", "bing.com", "baidu.com",
-                "offershow.cn", "nowcoder.com")),
+                "offershow.cn", "nowcoder.com", "mail.proton.me")),
 )
 
 
