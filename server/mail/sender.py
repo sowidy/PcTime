@@ -296,6 +296,10 @@ def send_merged_day(devices, day, email, dry_run=False, now=None):
     # subtract and the merged total is just the plain sum.
     union_intervals = mail_merge.union_intervals_by_app(app_intervals)
     union_bins = mail_merge.union_bins_from_intervals(union_intervals)
+    # Per-app same-app overlap: the daily Gantt draws union spans while the
+    # listed per-app totals sum both devices, so the chart's completeness
+    # check must allow exactly this shortfall or merged mail loses its chart.
+    merged["_app_overlap_seconds"] = mail_merge.per_app_overlap_seconds(app_intervals)
     if union_bins:
         timeline_rows = union_bins
         app_intervals = union_intervals

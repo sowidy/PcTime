@@ -204,6 +204,40 @@ def union_intervals_by_app(rows):
     return out
 
 
+def per_app_overlap_seconds(rows):
+    """Same-app cross-device overlap per app_name, in seconds.
+
+    Input is the flat list of interval rows from every device (same shape
+    as union_intervals_by_app takes). For each app, overlap is the summed
+    span durations minus the union span durations: the seconds two or more
+    devices ran the same app at the same time. Apps with no overlap are
+    left out. Different days are added together; the daily Gantt only ever
+    feeds it one day's rows.
+
+    This is what the daily Gantt chart's completeness check must allow for
+    merged mail: the merged per-app totals are sums across devices, but the
+    chart draws union spans, so the two differ by exactly this overlap.
+    Without the allowance the chart refuses to draw for any merged day
+    where one app ran on both devices at once.
+    """
+    summed = defaultdict(float)
+    for row in rows:
+        try:
+            start, end = float(row["start_second"]), float(row["end_second"])
+        except (KeyError, TypeError, ValueError):
+            continue
+        if end <= start:
+            continue
+        summed[row.get("app_name")] += end - start
+    union = defaultdict(float)
+    for row in union_intervals_by_app(rows):
+        union[row.get("app_name")] += (float(row["end_second"])
+                                       - float(row["start_second"]))
+    return {app: round(total - union.get(app, 0.0), 1)
+            for app, total in summed.items()
+            if total - union.get(app, 0.0) > 0}
+
+
 def union_bins_from_intervals(union_intervals):
     """Split union intervals into 15-minute bins (bucket = second // 900).
 

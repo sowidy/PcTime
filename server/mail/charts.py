@@ -533,8 +533,17 @@ def website_category_chart(rows):
 
 def website_gantt_chart(rows, interval_rows, day, *, key="host", title="网站使用时段",
                         noun="网站", chart_style="website-gantt", display_names=None,
-                        min_seconds=60, max_visible=None):
-    """Daily real intervals on a time axis; never infer spans from totals."""
+                        min_seconds=60, max_visible=None, allowed_gap=None):
+    """Daily real intervals on a time axis; never infer spans from totals.
+
+    ``allowed_gap`` maps a host/app name to seconds the interval total may
+    legitimately fall short of the listed total by. Merged mail passes the
+    same-app cross-device overlap here: the listed per-app total sums both
+    devices, the chart draws union spans, and the shortfall is exactly that
+    overlap, not missing data. Without it the chart refuses to draw for any
+    merged day. Single-device mail passes nothing, so its strict check is
+    unchanged.
+    """
     from mail.report import format_duration
     display_names = display_names or (site_names_for_rows(rows) if key == "host" else {})
     chart_names = site_names_for_rows(rows, chart=True) if key == "host" else display_names
@@ -564,10 +573,11 @@ def website_gantt_chart(rows, interval_rows, day, *, key="host", title="网站�
         if host in totals and math.isfinite(start) and math.isfinite(end) and 0 <= start < end <= 86400:
             intervals[host].append((start, end))
     required = visible if key == "host" else ordered
+    allowed_gap = allowed_gap or {}
     if (key != "host" and set(intervals) != set(totals)) or any(
             host not in intervals or
             abs(sum(end - start for start, end in intervals[host]) - totals[host]) >
-            max(2, totals[host] * .001)
+            max(2, totals[host] * .001) + float(allowed_gap.get(host, 0) or 0)
             for host in required):
         missing_note = ("尚未收到完整的网站起止时段；不根据每日总量或每小时汇总推造访问时间。"
                         if key == "host" else
@@ -633,17 +643,27 @@ def website_gantt_chart(rows, interval_rows, day, *, key="host", title="网站�
                    f'合计 {format_duration(sum(totals[h] for h in hidden))}（已计入总时长）'
                    if hidden else "")
     hidden_html = f'<p style="font-size:12px;color:#8592a3">{hidden_note}</p>' if hidden_note else ""
+    merged_note = ""
+    if key != "host" and any(float(v or 0) > 0 for v in (allowed_gap or {}).values()):
+        merged_note = ('<p style="font-size:12px;color:#8592a3">同一应用在多台设备'
+                       '同时使用的时段已合并显示一次；图例时长为各设备合计。</p>')
     return (f'<h2 style="font-size:18px;color:{theme.TEXT};margin:24px 0 8px">{title}</h2>'
             f'<p style="font-size:12px;color:#8592a3">时间 × {noun} · 图例为当天总时长</p>'
             f'<img data-chart-style="{chart_style}" width="600" height="{height // 2}" '
             f'style="display:block;width:100%;max-width:600px;height:auto" '
             f'alt="{noun}使用甘特图，按名称展示真实使用时段" src="data:image/png;base64,{encoded}">'
             f'<table role="presentation" width="100%" cellpadding="0" cellspacing="0">{legend_rows}</table>'
-            f'{hidden_html}')
+            f'{hidden_html}{merged_note}')
 
 
-def application_gantt_chart(summary, interval_rows, day):
-    """Render exact foreground app spans; 15-minute bins are never used as visits."""
+def application_gantt_chart(summary, interval_rows, day, overlap_by_app=None):
+    """Render exact foreground app spans; 15-minute bins are never used as visits.
+
+    ``overlap_by_app`` is the merged-mail allowance from
+    mail.merge.per_app_overlap_seconds: same-app seconds two devices ran at
+    once. The chart draws union spans, so without it any merged day with a
+    same-app overlap fails the completeness check and loses its chart.
+    """
     apps = summary.get("apps") or []
     rows = [{"day": str(day), "app_name": app["app_name"], "seconds": app["seconds"]}
             for app in apps if float(app.get("seconds") or 0) > 0]
@@ -651,7 +671,8 @@ def application_gantt_chart(summary, interval_rows, day):
     max_visible = min(40, config.MAIL_MAX_APPS) if config.MAIL_MAX_APPS > 0 else 40
     return website_gantt_chart(rows, interval_rows, day, key="app_name", title="软件使用时段和时长",
                                noun="软件", chart_style="application-gantt", display_names=names,
-                               min_seconds=60, max_visible=max_visible)
+                               min_seconds=60, max_visible=max_visible,
+                               allowed_gap=overlap_by_app)
 
 
 def weekly_website_daily_model(rows, start, end, readiness=()):

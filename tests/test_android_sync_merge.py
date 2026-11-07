@@ -138,6 +138,14 @@ class TestUnionIntervalsAndBins(unittest.TestCase):
         daily = merge.daily_apps_from_bins(bins)
         self.assertEqual(daily, [{"day": str(DAY), "app_name": "wechat", "seconds": 1800}])
 
+    def test_per_app_overlap_seconds(self):
+        rows = [{"day": str(DAY), "app_name": "wechat", "start_second": 0, "end_second": 600},
+                {"day": str(DAY), "app_name": "wechat", "start_second": 300, "end_second": 900},
+                {"day": str(DAY), "app_name": "douyin", "start_second": 0, "end_second": 300},
+                {"day": str(DAY), "app_name": "douyin", "start_second": 600, "end_second": 900}]
+        # wechat: 600+600-900 = 300s overlap; douyin spans are disjoint.
+        self.assertEqual(merge.per_app_overlap_seconds(rows), {"wechat": 300.0})
+
 
 class TestTimelineUnlocksSchema(unittest.TestCase):
     def test_old_payload_without_unlocks_still_parses_as_none(self):
@@ -378,6 +386,48 @@ class TestSendMergedDay(MergedMailTestCase):
         self.assertEqual(outcome["status"], "skipped")
         self.assertEqual(outcome["reason"], "no_data")
         self.send_mail.assert_not_called()
+
+    def test_merged_daily_mail_keeps_gantt_chart(self):
+        # Regression: the daily Gantt used to refuse to draw for merged mail
+        # because union spans are shorter than the summed per-app totals
+        # whenever one app ran on both devices at once. The chart must draw
+        # union spans and say so, on top of the merged breakdown.
+        self.get_summary.side_effect = lambda key, day: summary(
+            3600 if key == U_PC else 1800,
+            [app_row("wechat", 2000 if key == U_PC else 1200, 5),
+             app_row("douyin", 1600 if key == U_PC else 600, 2)])
+
+        def read_range(kind, key, start, end):
+            spans = {"wechat": (0, 3600) if key == U_PC else (1800, 3600),
+                     "douyin": (3600, 5200) if key == U_PC else (5400, 6000)}
+            if kind == "app_intervals":
+                return [{"day": str(DAY), "app_name": app,
+                         "start_second": s, "end_second": e}
+                        for app, (s, e) in spans.items()]
+            if kind == "timeline":
+                return [{"day": str(DAY), "bucket": s // 900, "app_name": app,
+                         "seconds": e - s} for app, (s, e) in spans.items()]
+            return []
+        self.read_range.side_effect = read_range
+        outcome = sender.send_merged_day(
+            [device(U_PC), device(U_PHONE)], DAY, MAIL)
+        self.assertEqual(outcome["status"], "sent")
+        _, _, text, html_body = self.send_mail.call_args[0]
+        self.assertIn("双设备重叠", text)
+        self.assertIn("软件使用时段和时长", html_body)
+        self.assertIn("data:image/png", html_body)
+        self.assertNotIn("尚未收到完整的软件起止时段", html_body)
+        self.assertIn("合并显示一次", html_body)
+
+    def test_gantt_still_refuses_incomplete_intervals(self):
+        # No overlap allowance: a missing app's spans still refuse the chart.
+        from mail.charts import application_gantt_chart
+        s = summary(3600, [app_row("wechat", 3600), app_row("douyin", 600)])
+        intervals = [{"day": str(DAY), "app_name": "wechat",
+                      "start_second": 0, "end_second": 1800}]
+        html_body = application_gantt_chart(s, intervals, DAY)
+        self.assertNotIn("data:image/png", html_body)
+        self.assertIn("尚未收到完整的软件起止时段", html_body)
 
 
 class TestRunGroupsByMailbox(MergedMailTestCase):

@@ -35,7 +35,9 @@ def render(summary, timeline_rows, site_rows, start, end, readiness=(), site_hou
     complete = {(str(r["day"]), r["kind"]) for r in readiness if r["complete"]}
     text, markup = [], []
     if not weekly and summary.get("apps"):
-        markup.append(application_gantt_chart(summary, app_intervals, start))
+        markup.append(application_gantt_chart(
+            summary, app_intervals, start,
+            overlap_by_app=summary.get("_app_overlap_seconds")))
     elif weekly and summary.get("apps"):
         markup.append(weekly_application_heatmap(summary, timeline_rows, start, end, readiness))
     sites = defaultdict(float)
@@ -81,7 +83,8 @@ def append_sections(message, summary, timeline_rows, site_rows, start, end,
         return message
     if html_size(body + extra_html) > 80000:
         # Keep website charts when a long site list exceeds the HTML budget.
-        extra_html = ((application_gantt_chart(summary, app_intervals, start)
+        extra_html = ((application_gantt_chart(summary, app_intervals, start,
+                                               overlap_by_app=summary.get("_app_overlap_seconds"))
                        if start == end and summary.get("apps") else
                        weekly_application_heatmap(summary, timeline_rows, start, end, readiness)
                        if start != end and summary.get("apps") else "") +
