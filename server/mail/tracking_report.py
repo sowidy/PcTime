@@ -3,7 +3,8 @@ from collections import defaultdict
 from datetime import timedelta
 import html
 import config
-from mail.charts import (application_gantt_chart, weekly_application_heatmap,
+from mail.charts import (application_gantt_chart, daily_winner_timeline,
+                         timeline_segments, weekly_application_heatmap,
                          website_chart, website_gantt_chart, html_size)
 from mail.site_names import names_for_hosts
 
@@ -34,6 +35,20 @@ def render(summary, timeline_rows, site_rows, start, end, readiness=(), site_hou
     site_intervals = [r for r in site_intervals if str(r.get("day", start)) in dates]
     complete = {(str(r["day"]), r["kind"]) for r in readiness if r["complete"]}
     text, markup = [], []
+    if not weekly:
+        # The winner timeline opens the mail, ahead of the Gantt charts.
+        app_segments, _ = timeline_segments(
+            summary, app_intervals, site_intervals, start,
+            sources=summary.get("_app_sources"),
+            site_sources=summary.get("_site_sources"))
+        if app_segments:
+            markup.append(daily_winner_timeline(
+                summary, app_intervals, site_intervals, start,
+                sources=summary.get("_app_sources"),
+                site_sources=summary.get("_site_sources")))
+            text.append("时间线：" + "；".join(
+                f"{s:02d}:00-{e:02d}:00 {label}"
+                for s, e, _, label in app_segments))
     if not weekly and summary.get("apps"):
         markup.append(application_gantt_chart(
             summary, app_intervals, start,
@@ -85,7 +100,12 @@ def append_sections(message, summary, timeline_rows, site_rows, start, end,
         return message
     if html_size(body + extra_html) > 80000:
         # Keep website charts when a long site list exceeds the HTML budget.
-        extra_html = ((application_gantt_chart(summary, app_intervals, start,
+        # The timeline stays first: it is the opening section of the mail.
+        extra_html = ((daily_winner_timeline(summary, app_intervals, site_intervals, start,
+                                             sources=summary.get("_app_sources"),
+                                             site_sources=summary.get("_site_sources"))
+                       if start == end else "") +
+                      (application_gantt_chart(summary, app_intervals, start,
                                                overlap_by_app=summary.get("_app_overlap_seconds"),
                                                sources=summary.get("_app_sources"))
                        if start == end and summary.get("apps") else

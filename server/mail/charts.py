@@ -21,7 +21,7 @@ import config
 from mail.colors import color_map
 from mail import chart_theme as theme
 from mail.site_categories import CATEGORIES, totals as category_totals
-from mail.site_names import names_for_rows as site_names_for_rows
+from mail.site_names import names_for_hosts, names_for_rows as site_names_for_rows
 
 IMAGE_DATA = re.compile(r'data:image/png;base64,([A-Za-z0-9+/=]+)')
 OTHER = "\x00other"
@@ -342,6 +342,175 @@ def application_chart(summary, start, end):
     totals = {a["app_name"]: float(a["seconds"]) for a in apps}
     return render(["Week" if start != end else start.strftime("%m-%d")], [totals], [True], names,
                   "应用时长构成", "仅收到周期汇总，展示单柱构成和总时长点，不推算每天/小时的分布。", limit, "应用")
+
+
+# Browsers open websites, so a browser winning an hour earns a second lane
+# showing that hour's most-used site.
+BROWSER_APPS = frozenset({
+    "chrome.exe", "msedge.exe", "firefox.exe", "brave.exe", "opera.exe",
+    "arc.exe", "vivaldi.exe", "chromium.exe", "safari.exe", "360se.exe",
+    "qqbrowser.exe", "sogouexplorer.exe", "2345explorer.exe", "liebao.exe",
+})
+
+
+def _merged_spans(spans):
+    """Collapse overlapping or touching (start, end) spans, sorted."""
+    merged = []
+    for start, end in sorted(spans):
+        if merged and start <= merged[-1][1]:
+            merged[-1][1] = max(merged[-1][1], end)
+        else:
+            merged.append([start, end])
+    return [(start, end) for start, end in merged]
+
+
+def _hourly_winners(rows, day, key):
+    """Per-hour winner from interval rows: {hour: (name, seconds)}.
+
+    Same-name spans union first, so one app or site running on two devices
+    at once counts once per wall-clock second: the winner is what owned
+    the most of that hour, not what summed the most across devices.
+    """
+    by_name = defaultdict(list)
+    for row in rows or []:
+        if str(row.get("day", day)) != str(day):
+            continue
+        try:
+            start, end = float(row["start_second"]), float(row["end_second"])
+        except (KeyError, TypeError, ValueError):
+            continue
+        if end > start:
+            by_name[str(row[key])].append((start, end))
+    winners = {}
+    for hour in range(24):
+        low, high = hour * 3600, (hour + 1) * 3600
+        best, best_seconds = None, 0.0
+        for name in sorted(by_name):
+            seconds = sum(max(0.0, min(end, high) - max(start, low))
+                          for start, end in _merged_spans(by_name[name]))
+            if seconds > best_seconds:
+                best, best_seconds = name, seconds
+        if best is not None:
+            winners[hour] = (best, best_seconds)
+    return winners
+
+
+def _winner_segments(winners):
+    """Merge consecutive hours with the same winner into (start, end, name)."""
+    segments = []
+    for hour in sorted(winners):
+        name = winners[hour][0]
+        if segments and segments[-1][2] == name and segments[-1][1] == hour:
+            segments[-1][1] = hour + 1
+        else:
+            segments.append([hour, hour + 1, name])
+    return [(start, end, name) for start, end, name in segments]
+
+
+def timeline_segments(summary, app_intervals, site_intervals, day, sources=None,
+                      site_sources=None):
+    """(app_segments, site_segments) for the daily winner timeline.
+
+    Each segment is (start_hour, end_hour, key, label): the most-used app
+    per hour, consecutive same-winner hours merged; the site lane covers
+    only hours the winning app was a browser, showing that hour's
+    most-used site. Labels are Chinese display names with the P/C/M
+    marker, e.g. '抖音 (M)'. Empty when the day has no app intervals.
+    """
+    app_winners = _hourly_winners(app_intervals, day, "app_name")
+    if not app_winners:
+        return [], []
+    names = {app["app_name"]: app.get("display_name") or app["app_name"]
+             for app in summary.get("apps") or []}
+
+    def marked(key, display, source_map):
+        marker = (source_map or {}).get(key)
+        return f"{display} ({marker})" if marker else display
+
+    app_segments = [(start, end, key, marked(key, names.get(key, key), sources))
+                    for start, end, key in _winner_segments(app_winners)]
+    browser_hours = {hour for hour, (name, _) in app_winners.items()
+                     if name.lower() in BROWSER_APPS}
+    site_segments = []
+    if browser_hours and site_intervals:
+        site_winners = _hourly_winners(site_intervals, day, "host")
+        site_winners = {hour: site_winners[hour] for hour in browser_hours
+                        if hour in site_winners}
+        site_names = names_for_hosts([name for _, (name, _) in
+                                      sorted(site_winners.items())])
+        site_segments = [(start, end, key,
+                          marked(key, site_names.get(key, key), site_sources))
+                         for start, end, key in _winner_segments(site_winners)]
+    return app_segments, site_segments
+
+
+def daily_winner_timeline(summary, app_intervals, site_intervals, day, sources=None,
+                          site_sources=None):
+    """One horizontal timeline for the top of the daily mail: each hour's
+    most-used app, with a second lane showing each browser hour's
+    most-used site. Segment names alternate above/below the bar so
+    neighboring labels never collide. '' when the day has no app intervals.
+    """
+    app_segments, site_segments = timeline_segments(
+        summary, app_intervals, site_intervals, day, sources, site_sources)
+    if not app_segments:
+        return ""
+    label_font = cjk_font(14) or ImageFont.load_default(size=14)
+    lane_font = cjk_font(16) or ImageFont.load_default(size=16)
+    small = ImageFont.load_default(size=14)
+    left, right = 90, 1160  # 24 hours at ~44.6px each; 14px "HH:00" is 35px, so labels clear.
+
+    def x(hour):
+        return left + (right - left) * hour / 24
+
+    # One lane per row: (lane name, segments, bar top, bar bottom).
+    lanes = [("软件", app_segments, 48, 84)]
+    if site_segments:
+        lanes.append(("网站", site_segments, 150, 186))
+    height = 258 if site_segments else 156
+    axis_y = height - 26
+    image = Image.new("RGB", (1200, height), theme.BACKGROUND)
+    draw = ImageDraw.Draw(image)
+    palette = color_map([key for _, _, key, _ in app_segments] +
+                        [key for _, _, key, _ in site_segments])
+    for hour in range(25):
+        pos = round(x(hour))
+        draw.line((pos, 40, pos, axis_y - 4), fill=theme.GRID, width=2)
+    for lane_name, segments, top, bottom in lanes:
+        draw.rounded_rectangle((left, top, right, bottom), radius=6, fill="#EDF0F3")
+        for start, end, key, _ in segments:
+            draw.rounded_rectangle((round(x(start)) + 1, top, round(x(end)) - 1, bottom),
+                                   radius=6, fill=palette[key])
+        draw.text((12, (top + bottom) // 2), lane_name, fill=theme.TEXT,
+                  font=lane_font, anchor="lm")
+
+        def fit_label(label):
+            max_width = 150
+            if label_font.getlength(label) <= max_width:
+                return label
+            if " (" in label:
+                base, marker = label.rsplit(" (", 1)
+                suffix = " (" + marker
+            else:
+                base, suffix = label, ""
+            while len(base) > 1 and label_font.getlength(base + "..." + suffix) > max_width:
+                base = base[:-1]
+            return base + "..." + suffix
+
+        for index, (start, end, _, label) in enumerate(segments):
+            center = (x(start) + x(end)) / 2
+            above = index % 2 == 0
+            cy = top - 18 if above else bottom + 18
+            draw.text((center, cy), fit_label(label), fill=theme.TEXT,
+                      font=label_font, anchor="mm")
+    for hour in range(25):
+        draw.text((round(x(hour)), axis_y), f"{hour:02d}:00", fill=theme.AXIS,
+                  font=small, anchor="mt")
+    encoded = base64.b64encode(_encode_png(image)).decode("ascii")
+    return (f'<h2 style="font-size:18px;color:{theme.TEXT};margin:24px 0 8px">今日时间线</h2>'
+            f'<p style="font-size:12px;color:#8592a3">每小时使用最多的软件；浏览器时段另显示使用最多的网站</p>'
+            f'<img src="data:image/png;base64,{encoded}" alt="今日时间线" '
+            f'style="width:100%;height:auto;display:block" />')
 
 
 def website_hourly_model(rows, hourly_rows, start, end, readiness=()):

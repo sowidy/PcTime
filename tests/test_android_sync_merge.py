@@ -467,6 +467,47 @@ class TestSendMergedDay(MergedMailTestCase):
         self.assertIn("抖音 (P)", html_body)
         self.assertIn("P 手机，C 电脑，M 两台都有", html_body)
 
+    def test_merged_mail_opens_with_winner_timeline(self):
+        self.get_summary.side_effect = lambda key, day: summary(
+            8400 if key == U_PC else 9000,
+            [app_row("chrome.exe", 4800, 5, "Chrome 浏览器"),
+             app_row("weixin.exe", 3600 if key == U_PC else 1800, 5, "微信")]
+            if key == U_PC else
+            [app_row("weixin.exe", 1800, 5, "微信"),
+             app_row("douyin.exe", 7200, 5, "抖音")])
+
+        def read_range(kind, key, start, end):
+            pc_apps = [("chrome.exe", 32400, 34200), ("chrome.exe", 36000, 39000),
+                       ("weixin.exe", 32400, 36000)]
+            phone_apps = [("weixin.exe", 36000, 37800), ("douyin.exe", 75600, 82800)]
+            if kind == "app_intervals":
+                apps = pc_apps if key == U_PC else phone_apps
+                return [{"day": str(DAY), "app_name": app,
+                         "start_second": s, "end_second": e} for app, s, e in apps]
+            if kind == "web_intervals" and key == U_PC:
+                return [{"day": str(DAY), "host": "douyin.com",
+                         "start_second": 36000, "end_second": 38400},
+                        {"day": str(DAY), "host": "chatgpt.com",
+                         "start_second": 38400, "end_second": 39000}]
+            if kind == "web" and key == U_PC:
+                return [{"day": str(DAY), "host": "douyin.com", "seconds": 2400},
+                        {"day": str(DAY), "host": "chatgpt.com", "seconds": 600}]
+            if kind == "timeline":
+                return []
+            return []
+        self.read_range.side_effect = read_range
+        outcome = sender.send_merged_day(
+            [device(U_PC),
+             device(U_PHONE, hostname="Pixel 8", platform="Android 14")],
+            DAY, MAIL)
+        self.assertEqual(outcome["status"], "sent")
+        _, _, _, html_body = self.send_mail.call_args[0]
+        self.assertIn("今日时间线", html_body)
+        self.assertLess(html_body.index("今日时间线"),
+                        html_body.index("软件使用时段和时长"))
+        self.assertIn("抖音 (P)", html_body)
+        self.assertIn("抖音 (C)", html_body)
+
     def test_gantt_still_refuses_incomplete_intervals(self):
         # No overlap allowance: a missing app's spans still refuse the chart.
         from mail.charts import application_gantt_chart
@@ -598,6 +639,50 @@ class TestRunGroupsByMailbox(MergedMailTestCase):
         _, subject, text, _ = self.send_mail.call_args[0]
         self.assertIn("2 小时", subject)  # 3600 + 3600, no overlap deducted
         self.assertNotIn("双设备重叠", text)
+
+
+class TestWinnerTimeline(unittest.TestCase):
+    def test_hourly_winners_merge_segments_and_site_lane(self):
+        from mail.charts import daily_winner_timeline, timeline_segments
+        summary = {"apps": [
+            {"app_name": "chrome.exe", "display_name": "Chrome 浏览器", "seconds": 4800},
+            {"app_name": "weixin.exe", "display_name": "微信", "seconds": 5400},
+            {"app_name": "douyin.exe", "display_name": "抖音", "seconds": 7200}]}
+        app_intervals = [
+            {"day": str(DAY), "app_name": "chrome.exe", "start_second": 32400, "end_second": 34200},
+            {"day": str(DAY), "app_name": "chrome.exe", "start_second": 36000, "end_second": 39000},
+            {"day": str(DAY), "app_name": "weixin.exe", "start_second": 32400, "end_second": 36000},
+            {"day": str(DAY), "app_name": "weixin.exe", "start_second": 36000, "end_second": 37800},
+            {"day": str(DAY), "app_name": "douyin.exe", "start_second": 75600, "end_second": 82800},
+        ]
+        site_intervals = [
+            {"day": str(DAY), "host": "douyin.com", "start_second": 36000, "end_second": 38400},
+            {"day": str(DAY), "host": "chatgpt.com", "start_second": 38400, "end_second": 39000},
+        ]
+        sources = {"chrome.exe": "C", "weixin.exe": "M", "douyin.exe": "P"}
+        site_sources = {"douyin.com": "C", "chatgpt.com": "C"}
+        app_segments, site_segments = timeline_segments(
+            summary, app_intervals, site_intervals, DAY, sources, site_sources)
+        # Hour 9: weixin 60m wins. Hour 10: chrome 50m beats weixin's 30m
+        # union (phone + PC ran it 10:00-10:30 at once); a naive cross-device
+        # sum would have given weixin 60m and the wrong winner.
+        # Hours 21-22 merge into one douyin segment.
+        self.assertEqual(app_segments, [
+            (9, 10, "weixin.exe", "微信 (M)"),
+            (10, 11, "chrome.exe", "Chrome 浏览器 (C)"),
+            (21, 23, "douyin.exe", "抖音 (P)"),
+        ])
+        # Only the browser hour (10) gets a site lane; douyin.com 40m beats ChatGPT 10m.
+        self.assertEqual(site_segments, [(10, 11, "douyin.com", "抖音 (C)")])
+        html_body = daily_winner_timeline(
+            summary, app_intervals, site_intervals, DAY, sources, site_sources)
+        self.assertIn("今日时间线", html_body)
+        self.assertIn("data:image/png", html_body)
+
+    def test_timeline_empty_day(self):
+        from mail.charts import daily_winner_timeline, timeline_segments
+        self.assertEqual(timeline_segments({"apps": []}, [], [], DAY), ([], []))
+        self.assertEqual(daily_winner_timeline({"apps": []}, [], [], DAY), "")
 
 
 class TestGanttLabels(unittest.TestCase):
