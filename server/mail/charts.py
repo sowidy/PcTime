@@ -1,7 +1,10 @@
 """Mail-safe, data-faithful charts rendered as headless PNG.
 
-Only ASCII axis labels are rasterized, so Linux needs neither Qt nor CJK fonts.
-Names and accessible values remain escaped HTML / plain text outside the image.
+Axis labels are rasterized with a CJK-capable font when the server has one
+(Windows ships Microsoft YaHei; many Linux boxes ship Noto CJK), so chart
+rows can show Chinese display names; without one they fall back to the ASCII
+keys, as before. Names and accessible values remain escaped HTML / plain
+text outside the image.
 """
 import base64
 from collections import defaultdict
@@ -9,6 +12,7 @@ from datetime import timedelta
 import html
 from io import BytesIO
 import math
+import os
 import re
 
 from PIL import Image, ImageDraw, ImageFont
@@ -22,6 +26,45 @@ from mail.site_names import names_for_rows as site_names_for_rows
 IMAGE_DATA = re.compile(r'data:image/png;base64,([A-Za-z0-9+/=]+)')
 OTHER = "\x00other"
 LINE = theme.LINE
+
+# CJK-capable fonts for rasterized chart labels, first match wins.
+# PCTIME_MAIL_CHART_CJK_FONT can point at an explicit font file.
+_CJK_FONT_CANDIDATES = (
+    r"C:\Windows\Fonts\msyh.ttc",
+    r"C:\Windows\Fonts\simhei.ttf",
+    r"C:\Windows\Fonts\simsun.ttc",
+    r"C:\Windows\Fonts\deng.ttf",
+    "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc",
+    "/usr/share/fonts/truetype/noto/NotoSansCJK-Regular.ttc",
+    "/usr/share/fonts/opentype/noto/NotoSerifCJK-Regular.ttc",
+    "/usr/share/fonts/truetype/wqy/wqy-zenhei.ttc",
+    "/usr/share/fonts/truetype/wqy/wqy-microhei.ttc",
+)
+_cjk_font_cache = {}
+
+
+def cjk_font(size):
+    """A CJK-capable TrueType font for chart labels, or None.
+
+    Pillow's bundled font has no CJK glyphs, which is why chart rows used
+    to show ASCII keys while the HTML legend showed Chinese names. When the
+    server has a CJK font, rows use the Chinese display names; otherwise
+    they fall back to the ASCII keys, exactly as before.
+    """
+    if size in _cjk_font_cache:
+        return _cjk_font_cache[size]
+    configured = (getattr(config, "MAIL_CHART_CJK_FONT", "") or "").strip()
+    paths = ([configured] if configured else []) + list(_CJK_FONT_CANDIDATES)
+    for path in paths:
+        try:
+            if path and os.path.isfile(path):
+                font = ImageFont.truetype(path, size)
+                _cjk_font_cache[size] = font
+                return font
+        except Exception:
+            continue
+    _cjk_font_cache[size] = None
+    return None
 # Muted, medium-depth category colors for stacked bars only. Cool and warm
 # neighbors remain distinct without the neon effect of fully saturated hues.
 STACK_PALETTE = ("#5D7FB0", "#D18B56", "#589C7B", "#9C78AF",
@@ -533,7 +576,7 @@ def website_category_chart(rows):
 
 def website_gantt_chart(rows, interval_rows, day, *, key="host", title="网站使用时段",
                         noun="网站", chart_style="website-gantt", display_names=None,
-                        min_seconds=60, max_visible=None, allowed_gap=None):
+                        min_seconds=60, max_visible=None, allowed_gap=None, sources=None):
     """Daily real intervals on a time axis; never infer spans from totals.
 
     ``allowed_gap`` maps a host/app name to seconds the interval total may
@@ -543,6 +586,9 @@ def website_gantt_chart(rows, interval_rows, day, *, key="host", title="网站�
     overlap, not missing data. Without it the chart refuses to draw for any
     merged day. Single-device mail passes nothing, so its strict check is
     unchanged.
+
+    ``sources`` maps a host/app name to 'P' (phone), 'C' (computer) or 'M'
+    (both). Row labels and legend entries carry the marker, e.g. '抖音 (M)'.
     """
     from mail.report import format_duration
     display_names = display_names or (site_names_for_rows(rows) if key == "host" else {})
@@ -598,7 +644,8 @@ def website_gantt_chart(rows, interval_rows, day, *, key="host", title="网站�
     height = bottom + 66
     image = Image.new("RGB", (1200, height), theme.BACKGROUND)
     draw = ImageDraw.Draw(image)
-    font = ImageFont.load_default(size=19)
+    label_font = cjk_font(19)
+    font = label_font or ImageFont.load_default(size=19)
     small = ImageFont.load_default(size=17)
     def x(seconds):
         return left + (seconds / 3600 - left_hour) * (right - left) / (right_hour - left_hour)
@@ -613,12 +660,29 @@ def website_gantt_chart(rows, interval_rows, day, *, key="host", title="网站�
             draw.line((pos, top - 12, pos, bottom + 4), fill=theme.GRID, width=2)
             draw.text((pos, bottom + 16), f"{hour:02d}:00", fill=theme.AXIS, font=small, anchor="mt")
     palette = color_map(visible)
+
+    def label_parts(host):
+        """(base name, ' (P)'/' (C)'/' (M)' suffix) for one row.
+
+        The PNG label uses the Chinese name only when a CJK font is
+        available; otherwise it falls back to the ASCII key, as before.
+        """
+        base = display_names.get(host, host) if label_font is not None \
+            else chart_names.get(host, host)
+        if label_font is None and any(ord(char) > 127 for char in base):
+            base = host
+        marker = (sources or {}).get(host)
+        return base, f" ({marker})" if marker else ""
+
     for index, host in enumerate(visible):
         y = top + index * stride
-        display_label = chart_names.get(host, host)
-        if any(ord(char) > 127 for char in display_label):
-            display_label = host  # Pillow's bundled font has no CJK glyphs; HTML legend has the full label.
-        label = display_label if len(display_label) <= 20 else display_label[:17] + "..."
+        base, suffix = label_parts(host)
+        label = base + suffix
+        if font.getlength(label) > 230:
+            # Shorten the name, keep the marker visible.
+            while len(base) > 1 and font.getlength(base + "..." + suffix) > 230:
+                base = base[:-1]
+            label = base + "..." + suffix
         draw.text((12, y + 13), label, fill=theme.TEXT, font=font, anchor="lm")
         seconds = totals[host]
         duration = (f"{seconds / 3600:.1f}h" if seconds >= 3600 else
@@ -633,8 +697,13 @@ def website_gantt_chart(rows, interval_rows, day, *, key="host", title="网站�
             draw.line((a + 2, y + 6, max(a + 2, b - 2), y + 6), fill="#F8FBFF", width=2)
     draw.text((left, 29), "TIME OF DAY", fill=theme.MUTED, font=small)
     encoded = base64.b64encode(_encode_png(image)).decode("ascii")
+    def legend_label(host):
+        base = display_names.get(host, host)
+        marker = (sources or {}).get(host)
+        return f"{base} ({marker})" if marker else base
+
     legend = [f'<td width="50%" valign="top" style="padding:4px 8px;font-size:12px;color:#536176;word-break:break-all">'
-              f'<span style="color:{palette[host]}">●</span> {html.escape(display_names.get(host, host))} · '
+              f'<span style="color:{palette[host]}">●</span> {html.escape(legend_label(host))} · '
               f'{format_duration(totals[host])}</td>' for host in visible]
     legend_rows = "".join("<tr>" + "".join(legend[i:i+2]) + "</tr>"
                           for i in range(0, len(legend), 2))
@@ -647,8 +716,9 @@ def website_gantt_chart(rows, interval_rows, day, *, key="host", title="网站�
     if key != "host" and any(float(v or 0) > 0 for v in (allowed_gap or {}).values()):
         merged_note = ('<p style="font-size:12px;color:#8592a3">同一应用在多台设备'
                        '同时使用的时段已合并显示一次；图例时长为各设备合计。</p>')
+    source_note = "（P 手机，C 电脑，M 两台都有）" if sources else ""
     return (f'<h2 style="font-size:18px;color:{theme.TEXT};margin:24px 0 8px">{title}</h2>'
-            f'<p style="font-size:12px;color:#8592a3">时间 × {noun} · 图例为当天总时长</p>'
+            f'<p style="font-size:12px;color:#8592a3">时间 × {noun} · 图例为当天总时长{source_note}</p>'
             f'<img data-chart-style="{chart_style}" width="600" height="{height // 2}" '
             f'style="display:block;width:100%;max-width:600px;height:auto" '
             f'alt="{noun}使用甘特图，按名称展示真实使用时段" src="data:image/png;base64,{encoded}">'
@@ -656,13 +726,14 @@ def website_gantt_chart(rows, interval_rows, day, *, key="host", title="网站�
             f'{hidden_html}{merged_note}')
 
 
-def application_gantt_chart(summary, interval_rows, day, overlap_by_app=None):
+def application_gantt_chart(summary, interval_rows, day, overlap_by_app=None, sources=None):
     """Render exact foreground app spans; 15-minute bins are never used as visits.
 
     ``overlap_by_app`` is the merged-mail allowance from
     mail.merge.per_app_overlap_seconds: same-app seconds two devices ran at
     once. The chart draws union spans, so without it any merged day with a
     same-app overlap fails the completeness check and loses its chart.
+    ``sources`` maps each app to 'P' (phone), 'C' (computer) or 'M' (both).
     """
     apps = summary.get("apps") or []
     rows = [{"day": str(day), "app_name": app["app_name"], "seconds": app["seconds"]}
@@ -672,7 +743,7 @@ def application_gantt_chart(summary, interval_rows, day, overlap_by_app=None):
     return website_gantt_chart(rows, interval_rows, day, key="app_name", title="软件使用时段和时长",
                                noun="软件", chart_style="application-gantt", display_names=names,
                                min_seconds=60, max_visible=max_visible,
-                               allowed_gap=overlap_by_app)
+                               allowed_gap=overlap_by_app, sources=sources)
 
 
 def weekly_website_daily_model(rows, start, end, readiness=()):

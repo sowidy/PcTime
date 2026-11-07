@@ -172,6 +172,9 @@ def send_day(user_key, day, email=None, dry_run=False, now=None):
     user = users.get_user(user_key)
     # Rendering-only fields, no change to upload/API contracts.
     summary = {**summary, "_readiness": readiness}
+    kind = mail_merge.device_kind((user or {}).get("platform"))
+    summary["_app_sources"] = {a["app_name"]: kind for a in summary.get("apps") or []}
+    summary["_site_sources"] = {str(r["host"]): kind for r in site_rows}
     if app_summary_missing:
         subject, text, html_body = report.build_missing_app_message(day, user, weekly)
     elif weekly:
@@ -247,6 +250,7 @@ def send_merged_day(devices, day, email, dry_run=False, now=None):
                   for i in range((range_end - range_start).days + 1)}
     named_summaries = []
     site_rows, site_hours, site_intervals = [], [], []
+    site_rows_by_device = []
     app_intervals, timeline_rows, readiness = [], [], []
     # Per-device app intervals, kept per device (not flattened) so the merged
     # mail can collapse the same physical device registered twice.
@@ -259,10 +263,12 @@ def send_merged_day(devices, day, email, dry_run=False, now=None):
             summary = usage_records.get_daily_summary(key, day)
         named_summaries.append((mail_merge.device_label(device), summary))
         device_intervals = []
+        web_rows = []
         if config.MAIL_TRACKING_ENABLED:
             from db import tracking
             try:
-                site_rows.extend(tracking.read_range("web", key, range_start, range_end))
+                web_rows = tracking.read_range("web", key, range_start, range_end)
+                site_rows.extend(web_rows)
                 site_hours.extend(tracking.read_range("web_hourly", key, range_start, range_end))
                 site_intervals.extend(tracking.read_range("web_intervals", key, range_start, range_end))
                 # Intervals are fetched even for weekly mail: the weekly
@@ -273,6 +279,7 @@ def send_merged_day(devices, day, email, dry_run=False, now=None):
                 readiness.extend(tracking.readiness(key, range_start, range_end))
             except Exception:
                 log.warning("合并报告 %s 数据不可用，继续生成其他报告内容", key, exc_info=True)
+        site_rows_by_device.append(web_rows)
         app_intervals_by_device.append(device_intervals)
     merged = mail_merge.merge_app_summaries(named_summaries)
     app_summary_missing = merged is None
@@ -295,6 +302,16 @@ def send_merged_day(devices, day, email, dry_run=False, now=None):
     # listed per-app totals sum both devices, so the chart's completeness
     # check must allow exactly this shortfall or merged mail loses its chart.
     merged["_app_overlap_seconds"] = mail_merge.per_app_overlap_seconds(app_intervals)
+    # Which device each app / site ran on: 'P' phone, 'C' computer, 'M' both.
+    # The Gantt charts mark every row and legend entry with it.
+    merged["_app_sources"] = mail_merge.sources_by_key(
+        (mail_merge.device_kind(d.get("platform")),
+         {r.get("app_name") for r in rows if r.get("app_name")})
+        for d, rows in zip(devices, app_intervals_by_device))
+    merged["_site_sources"] = mail_merge.sources_by_key(
+        (mail_merge.device_kind(d.get("platform")),
+         {str(r.get("host")) for r in rows if r.get("host")})
+        for d, rows in zip(devices, site_rows_by_device))
     if union_bins:
         timeline_rows = union_bins
         app_intervals = union_intervals

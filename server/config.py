@@ -281,6 +281,10 @@ MAIL_MAX_SITES = int(_env("PCTIME_MAIL_MAX_SITES", "40"))
 # Largest categories shown separately in stacked charts; remaining time is Other.
 MAIL_CHART_SERIES = max(1, min(12, int(_env("PCTIME_MAIL_CHART_SERIES", "8"))))
 
+# 图表中文标签要用的中文字体文件。留空时自动找：Windows 用微软雅黑，
+# Linux 找 Noto CJK / 文泉驿；找不到就回退到英文键名。
+MAIL_CHART_CJK_FONT = _env("PCTIME_MAIL_CHART_CJK_FONT", "")
+
 # 单次 SMTP 操作的超时（秒）。设短一点，免得某个收件方的服务器卡住时
 # 把整个发送线程一直吊在那里。
 SMTP_TIMEOUT = int(_env("PCTIME_SMTP_TIMEOUT", "20"))

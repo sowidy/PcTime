@@ -238,6 +238,26 @@ def per_app_overlap_seconds(rows):
             if total - union.get(app, 0.0) > 0}
 
 
+def device_kind(platform):
+    """'P' for a phone (Android), 'C' for anything else (a computer)."""
+    return "P" if str(platform or "").strip().lower().startswith("android") else "C"
+
+
+def sources_by_key(per_device):
+    """Merge per-device key sets into {key: 'P'/'C'/'M'}.
+
+    ``per_device`` is an iterable of (kind, keys) pairs, kind 'P' or 'C'.
+    A key seen on both kinds is 'M': the app or site ran on both devices.
+    Used for the Gantt chart markers.
+    """
+    kinds = {}
+    for kind, keys in per_device:
+        for key in keys or []:
+            kinds.setdefault(key, set()).add(kind)
+    return {key: "M" if len(seen) > 1 else next(iter(seen))
+            for key, seen in kinds.items()}
+
+
 def dedupe_devices_by_label(devices, app_intervals_by_device, device_rows):
     """Collapse the same physical device registered under several user_keys.
 

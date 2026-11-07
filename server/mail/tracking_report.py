@@ -37,7 +37,8 @@ def render(summary, timeline_rows, site_rows, start, end, readiness=(), site_hou
     if not weekly and summary.get("apps"):
         markup.append(application_gantt_chart(
             summary, app_intervals, start,
-            overlap_by_app=summary.get("_app_overlap_seconds")))
+            overlap_by_app=summary.get("_app_overlap_seconds"),
+            sources=summary.get("_app_sources")))
     elif weekly and summary.get("apps"):
         markup.append(weekly_application_heatmap(summary, timeline_rows, start, end, readiness))
     sites = defaultdict(float)
@@ -50,7 +51,8 @@ def render(summary, timeline_rows, site_rows, start, end, readiness=(), site_hou
         markup.append(f'<p style="font-size:13px;color:#64748b;margin:20px 0 4px">{html.escape(line)}</p>')
         _site_text(sites, text)
         if not weekly:
-            markup.append(website_gantt_chart(site_rows, site_intervals, start))
+            markup.append(website_gantt_chart(site_rows, site_intervals, start,
+                                              sources=summary.get("_site_sources")))
         markup.append(website_chart(site_rows, start, end, readiness, site_hours))
         if weekly:
             for day in days:
@@ -84,11 +86,13 @@ def append_sections(message, summary, timeline_rows, site_rows, start, end,
     if html_size(body + extra_html) > 80000:
         # Keep website charts when a long site list exceeds the HTML budget.
         extra_html = ((application_gantt_chart(summary, app_intervals, start,
-                                               overlap_by_app=summary.get("_app_overlap_seconds"))
+                                               overlap_by_app=summary.get("_app_overlap_seconds"),
+                                               sources=summary.get("_app_sources"))
                        if start == end and summary.get("apps") else
                        weekly_application_heatmap(summary, timeline_rows, start, end, readiness)
                        if start != end and summary.get("apps") else "") +
-                      (website_gantt_chart(site_rows, site_intervals, start) if start == end and site_rows else "") +
+                      (website_gantt_chart(site_rows, site_intervals, start,
+                                           sources=summary.get("_site_sources")) if start == end and site_rows else "") +
                       (website_chart(site_rows, start, end, readiness, site_hours) if site_rows else ""))
     if html_size(body + extra_html) <= 80000:
         if "<!-- tracking-sections -->" in body:

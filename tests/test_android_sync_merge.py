@@ -148,6 +148,16 @@ class TestUnionIntervalsAndBins(unittest.TestCase):
         # wechat: 600+600-900 = 300s overlap; douyin spans are disjoint.
         self.assertEqual(merge.per_app_overlap_seconds(rows), {"wechat": 300.0})
 
+    def test_device_kind_and_sources_by_key(self):
+        self.assertEqual(merge.device_kind("Android 14"), "P")
+        self.assertEqual(merge.device_kind("android"), "P")
+        self.assertEqual(merge.device_kind("Windows 11"), "C")
+        self.assertEqual(merge.device_kind(""), "C")
+        self.assertEqual(merge.sources_by_key([
+            ("C", ["chrome.exe", "weixin.exe"]),
+            ("P", ["weixin.exe", "douyin.exe"]),
+        ]), {"chrome.exe": "C", "weixin.exe": "M", "douyin.exe": "P"})
+
 
 class TestTimelineUnlocksSchema(unittest.TestCase):
     def test_old_payload_without_unlocks_still_parses_as_none(self):
@@ -421,6 +431,42 @@ class TestSendMergedDay(MergedMailTestCase):
         self.assertNotIn("尚未收到完整的软件起止时段", html_body)
         self.assertIn("合并显示一次", html_body)
 
+    def test_merged_gantt_labels_show_chinese_and_markers(self):
+        # Gantt rows and legend use Chinese display names with a device
+        # marker: P phone, C computer, M both. WeChat ran on both devices,
+        # Chrome only on PC, Douyin only on the phone.
+        self.get_summary.side_effect = lambda key, day: summary(
+            3600 if key == U_PC else 1800,
+            [app_row("weixin.exe", 2000 if key == U_PC else 1200, 5, "微信"),
+             app_row("chrome.exe" if key == U_PC else "douyin.exe",
+                     1600 if key == U_PC else 600, 2,
+                     "Chrome 浏览器" if key == U_PC else "抖音")])
+
+        def read_range(kind, key, start, end):
+            spans = {"weixin.exe": (0, 2000) if key == U_PC else (1800, 3000),
+                     "chrome.exe": (2000, 3600),
+                     "douyin.exe": (3600, 4200)}
+            if kind == "app_intervals":
+                apps = ["weixin.exe", "chrome.exe"] if key == U_PC else ["weixin.exe", "douyin.exe"]
+                return [{"day": str(DAY), "app_name": app,
+                         "start_second": spans[app][0], "end_second": spans[app][1]}
+                        for app in apps]
+            if kind == "timeline":
+                return []
+            return []
+        self.read_range.side_effect = read_range
+        outcome = sender.send_merged_day(
+            [device(U_PC),
+             device(U_PHONE, hostname="Pixel 8", platform="Android 14")],
+            DAY, MAIL)
+        self.assertEqual(outcome["status"], "sent")
+        _, _, _, html_body = self.send_mail.call_args[0]
+        self.assertIn("data:image/png", html_body)
+        self.assertIn("微信 (M)", html_body)
+        self.assertIn("Chrome 浏览器 (C)", html_body)
+        self.assertIn("抖音 (P)", html_body)
+        self.assertIn("P 手机，C 电脑，M 两台都有", html_body)
+
     def test_gantt_still_refuses_incomplete_intervals(self):
         # No overlap allowance: a missing app's spans still refuse the chart.
         from mail.charts import application_gantt_chart
@@ -552,6 +598,40 @@ class TestRunGroupsByMailbox(MergedMailTestCase):
         _, subject, text, _ = self.send_mail.call_args[0]
         self.assertIn("2 小时", subject)  # 3600 + 3600, no overlap deducted
         self.assertNotIn("双设备重叠", text)
+
+
+class TestGanttLabels(unittest.TestCase):
+    def test_website_gantt_labels_show_chinese_and_markers(self):
+        from mail.charts import website_gantt_chart
+        rows = [{"day": str(DAY), "host": "douyin.com", "seconds": 2721},
+                {"day": str(DAY), "host": "hpc5000.shu.edu.cn", "seconds": 2474}]
+        intervals = [{"day": str(DAY), "host": "douyin.com",
+                      "start_second": 0, "end_second": 2721},
+                     {"day": str(DAY), "host": "hpc5000.shu.edu.cn",
+                      "start_second": 3600, "end_second": 6074}]
+        html_body = website_gantt_chart(
+            rows, intervals, DAY,
+            sources={"douyin.com": "C", "hpc5000.shu.edu.cn": "C"})
+        self.assertIn("data:image/png", html_body)
+        self.assertIn("抖音 (C)", html_body)
+        self.assertIn("hpc5000.shu.edu.cn (C)", html_body)
+        self.assertIn("P 手机，C 电脑，M 两台都有", html_body)
+
+    def test_cjk_font_discovery(self):
+        from mail import charts
+        charts._cjk_font_cache.clear()
+        try:
+            # This machine ships Noto CJK; a server without any CJK font
+            # must degrade to None instead of raising.
+            self.assertIsNotNone(charts.cjk_font(19))
+            charts._cjk_font_cache.clear()
+            with mock.patch.object(charts.config, "MAIL_CHART_CJK_FONT",
+                                  "/nonexistent/font.ttf"):
+                with mock.patch.object(charts, "_CJK_FONT_CANDIDATES",
+                                      ("/nonexistent/a.ttf",)):
+                    self.assertIsNone(charts.cjk_font(19))
+        finally:
+            charts._cjk_font_cache.clear()
 
 
 class TestMergedReportRendering(unittest.TestCase):
