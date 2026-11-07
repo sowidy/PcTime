@@ -543,35 +543,43 @@ def daily_winner_timeline(summary, app_intervals, site_intervals, day):
         for sub_start, _, _, _ in subs:
             draw.line((round(x(sub_start)), 66, round(x(sub_start)), 102),
                       fill="#ffffff", width=2)
+    # Only stretches longer than 5 minutes get a name (app, or website for
+    # a browser stretch); shorter ones show just the block.
     items = []
     for index, (start, end, _, label, subs) in enumerate(app_segments):
         center = (x(start) + x(end)) / 2
         if subs:
             # Browser: show the websites, not the browser name.
             for sub_start, sub_end, _, site_label in subs:
+                if sub_end - sub_start <= 300:
+                    continue
                 block_left, block_right = x(sub_start), x(sub_end)
                 # Prefer the name inside its own block (the palette is
                 # light, so dark text reads); otherwise a label row.
                 if label_font.getlength(site_label) + 4 <= block_right - block_left:
                     draw.text(((block_left + block_right) / 2, 84), site_label,
                               fill=theme.TEXT, font=label_font, anchor="mm")
-                elif block_right - block_left >= 20:
+                else:
                     items.append(((block_left + block_right) / 2, site_label, False))
-        else:
+        elif end - start > 300:
             items.append((center, label, index % 2 == 0))
-    # Leader lines tie each name to its block; drawn first so the label's
-    # white chip covers the line where it passes behind another name.
+    # Leader lines tie each name to its block. The white chip goes down
+    # first (clean background over the gridlines); each line is then drawn
+    # over the chips so it reaches its own text, and the text last so a
+    # line passing behind another name is covered by that name's glyphs.
+    # Near rows get short leaders, far rows long ones.
     assignments = [a for a in _assign_label_rows(items, label_font) if a is not None]
-    for label, row_y, center in assignments:
-        if row_y < 66:
-            draw.line((center, row_y + 9, center, 66), fill="#C9D2DE", width=2)
-        else:
-            draw.line((center, 102, center, row_y - 9), fill="#C9D2DE", width=2)
     for label, row_y, center in assignments:
         width = label_font.getlength(label)
         draw.rectangle((center - width / 2 - 3, row_y - 9,
                         center + width / 2 + 3, row_y + 9),
                        fill=theme.BACKGROUND)
+    for label, row_y, center in assignments:
+        if row_y < 66:
+            draw.line((center, row_y + 7, center, 66), fill="#7E8FA6", width=2)
+        else:
+            draw.line((center, 102, center, row_y - 7), fill="#7E8FA6", width=2)
+    for label, row_y, center in assignments:
         draw.text((center, row_y), label, fill=theme.TEXT,
                   font=label_font, anchor="mm")
     encoded = base64.b64encode(_encode_png(image)).decode("ascii")

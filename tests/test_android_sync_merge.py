@@ -745,13 +745,38 @@ class TestWinnerTimeline(unittest.TestCase):
         match = re.search(r"data:image/png;base64,([A-Za-z0-9+/=]+)", html_body)
         self.assertIsNotNone(match)
         image = Image.open(io.BytesIO(base64.b64decode(match.group(1)))).convert("RGB")
-        leader = (201, 210, 222)  # #C9D2DE
+        leader = (126, 143, 166)  # #7E8FA6
         above = any(image.getpixel((x, y)) == leader
                     for x in range(image.width) for y in range(40, 64))
         below = any(image.getpixel((x, y)) == leader
                     for x in range(image.width) for y in range(104, 118))
         self.assertTrue(above)
         self.assertTrue(below)
+
+    def test_short_segments_get_no_name(self):
+        # A stretch of 5 minutes or less shows only its block: no name,
+        # and therefore no leader line. A 6-minute stretch gets both.
+        import base64
+        import io
+        import re
+        from PIL import Image
+        from mail.charts import daily_winner_timeline
+        leader = (126, 143, 166)  # #7E8FA6
+
+        def has_leader(seconds):
+            summary = {"apps": [{"app_name": "weixin.exe",
+                                  "display_name": "微信", "seconds": seconds}]}
+            intervals = [{"day": str(DAY), "app_name": "weixin.exe",
+                          "start_second": 36000, "end_second": 36000 + seconds}]
+            html_body = daily_winner_timeline(summary, intervals, [], DAY)
+            match = re.search(r"data:image/png;base64,([A-Za-z0-9+/=]+)", html_body)
+            self.assertIsNotNone(match)
+            image = Image.open(io.BytesIO(base64.b64decode(match.group(1)))).convert("RGB")
+            return any(image.getpixel((x, y)) == leader
+                       for x in range(image.width) for y in range(image.height))
+
+        self.assertFalse(has_leader(300))
+        self.assertTrue(has_leader(360))
 
     def test_timeline_empty_day(self):
         from mail.charts import daily_winner_timeline, timeline_segments
