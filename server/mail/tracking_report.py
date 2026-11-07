@@ -37,18 +37,26 @@ def render(summary, timeline_rows, site_rows, start, end, readiness=(), site_hou
     text, markup = [], []
     if not weekly:
         # The winner timeline opens the mail, ahead of the Gantt charts.
-        app_segments, _ = timeline_segments(
+        app_segments, _, _ = timeline_segments(
             summary, app_intervals, site_intervals, start,
-            sources=summary.get("_app_sources"),
-            site_sources=summary.get("_site_sources"))
+            sources=summary.get("_app_sources"))
         if app_segments:
             markup.append(daily_winner_timeline(
                 summary, app_intervals, site_intervals, start,
-                sources=summary.get("_app_sources"),
-                site_sources=summary.get("_site_sources")))
-            text.append("时间线：" + "；".join(
-                f"{s:02d}:00-{e:02d}:00 {label}"
-                for s, e, _, label in app_segments))
+                sources=summary.get("_app_sources")))
+
+            def _hhmm(seconds):
+                return f"{int(seconds // 3600):02d}:{int(seconds % 3600 // 60):02d}"
+
+            parts = []
+            for seg_start, seg_end, _, label, subs in app_segments:
+                part = f"{_hhmm(seg_start)}-{_hhmm(seg_end)} {label}"
+                if subs:
+                    part += "（" + "、".join(
+                        f"{site} {_hhmm(sub_start)}-{_hhmm(sub_end)}"
+                        for sub_start, sub_end, _, site in subs) + "）"
+                parts.append(part)
+            text.append("时间线：" + "；".join(parts))
     if not weekly and summary.get("apps"):
         markup.append(application_gantt_chart(
             summary, app_intervals, start,
@@ -102,8 +110,7 @@ def append_sections(message, summary, timeline_rows, site_rows, start, end,
         # Keep website charts when a long site list exceeds the HTML budget.
         # The timeline stays first: it is the opening section of the mail.
         extra_html = ((daily_winner_timeline(summary, app_intervals, site_intervals, start,
-                                             sources=summary.get("_app_sources"),
-                                             site_sources=summary.get("_site_sources"))
+                                             sources=summary.get("_app_sources"))
                        if start == end else "") +
                       (application_gantt_chart(summary, app_intervals, start,
                                                overlap_by_app=summary.get("_app_overlap_seconds"),

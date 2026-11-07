@@ -642,17 +642,17 @@ class TestRunGroupsByMailbox(MergedMailTestCase):
 
 
 class TestWinnerTimeline(unittest.TestCase):
-    def test_hourly_winners_merge_segments_and_site_lane(self):
+    def test_segments_follow_real_spans_and_split_browser(self):
         from mail.charts import daily_winner_timeline, timeline_segments
         summary = {"apps": [
             {"app_name": "chrome.exe", "display_name": "Chrome 浏览器", "seconds": 4800},
-            {"app_name": "weixin.exe", "display_name": "微信", "seconds": 5400},
+            {"app_name": "weixin.exe", "display_name": "微信", "seconds": 7200},
             {"app_name": "douyin.exe", "display_name": "抖音", "seconds": 7200}]}
         app_intervals = [
             {"day": str(DAY), "app_name": "chrome.exe", "start_second": 32400, "end_second": 34200},
             {"day": str(DAY), "app_name": "chrome.exe", "start_second": 36000, "end_second": 39000},
             {"day": str(DAY), "app_name": "weixin.exe", "start_second": 32400, "end_second": 36000},
-            {"day": str(DAY), "app_name": "weixin.exe", "start_second": 36000, "end_second": 37800},
+            {"day": str(DAY), "app_name": "weixin.exe", "start_second": 34200, "end_second": 37800},
             {"day": str(DAY), "app_name": "douyin.exe", "start_second": 75600, "end_second": 82800},
         ]
         site_intervals = [
@@ -660,28 +660,29 @@ class TestWinnerTimeline(unittest.TestCase):
             {"day": str(DAY), "host": "chatgpt.com", "start_second": 38400, "end_second": 39000},
         ]
         sources = {"chrome.exe": "C", "weixin.exe": "M", "douyin.exe": "P"}
-        site_sources = {"douyin.com": "C", "chatgpt.com": "C"}
-        app_segments, site_segments = timeline_segments(
-            summary, app_intervals, site_intervals, DAY, sources, site_sources)
-        # Hour 9: weixin 60m wins. Hour 10: chrome 50m beats weixin's 30m
-        # union (phone + PC ran it 10:00-10:30 at once); a naive cross-device
-        # sum would have given weixin 60m and the wrong winner.
-        # Hours 21-22 merge into one douyin segment.
+        app_segments, first, last = timeline_segments(
+            summary, app_intervals, site_intervals, DAY, sources)
+        # Weixin ran 09:00-10:00 on PC and 09:30-10:30 on the phone: one
+        # continuous 90-minute run across the device switch, so it owns the
+        # contested 10:00-10:30 stretch over chrome's 50-minute run, and
+        # chrome only takes 10:30-10:50. A per-device sum would have split
+        # the weixin run at the switch and told the wrong story.
+        self.assertEqual((first, last), (32400, 82800))
         self.assertEqual(app_segments, [
-            (9, 10, "weixin.exe", "微信 (M)"),
-            (10, 11, "chrome.exe", "Chrome 浏览器 (C)"),
-            (21, 23, "douyin.exe", "抖音 (P)"),
+            (32400, 37800, "weixin.exe", "微信 (M)", []),
+            (37800, 39000, "chrome.exe", "Chrome 浏览器 (C)",
+             [(37800, 38400, "douyin.com", "抖音"),
+              (38400, 39000, "chatgpt.com", "ChatGPT")]),
+            (75600, 82800, "douyin.exe", "抖音 (P)", []),
         ])
-        # Only the browser hour (10) gets a site lane; douyin.com 40m beats ChatGPT 10m.
-        self.assertEqual(site_segments, [(10, 11, "douyin.com", "抖音 (C)")])
         html_body = daily_winner_timeline(
-            summary, app_intervals, site_intervals, DAY, sources, site_sources)
+            summary, app_intervals, site_intervals, DAY, sources)
         self.assertIn("今日时间线", html_body)
         self.assertIn("data:image/png", html_body)
 
     def test_timeline_empty_day(self):
         from mail.charts import daily_winner_timeline, timeline_segments
-        self.assertEqual(timeline_segments({"apps": []}, [], [], DAY), ([], []))
+        self.assertEqual(timeline_segments({"apps": []}, [], [], DAY), ([], 0, 0))
         self.assertEqual(daily_winner_timeline({"apps": []}, [], [], DAY), "")
 
 
