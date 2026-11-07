@@ -21,7 +21,8 @@ import config
 _SCHEMA_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "schema.sql")
 REQUIRED_TABLES = frozenset(("users", "usage_records", "mail_log", "device_tokens",
                              "website_usage_records", "website_hourly_usage", "website_intervals",
-                             "app_timeline_bins", "app_timeline_intervals", "tracking_uploads"))
+                             "app_timeline_bins", "app_timeline_intervals", "tracking_uploads",
+                             "android_daily_stats"))
 
 
 # ── 连接 ──────────────────────────────────────────────────────

@@ -143,6 +143,11 @@ class TimelineDay(StrictModel):
     day: date
     bins: list[TimelineBin] = Field(max_length=1000)
     intervals: list[AppInterval] | None = Field(default=None, max_length=10000)
+    # Android daily unlock count (keyguard unlocks for the whole day).
+    # Optional so old clients keep working; when present it is stored in
+    # android_daily_stats by api/tracking.py. It is NOT launches: the legacy
+    # usage_records.launches remains "starts per app per day".
+    unlocks: int | None = Field(default=None, ge=0, le=100000, strict=True)
     complete: bool = False
 
     @model_validator(mode="after")
@@ -172,6 +177,35 @@ class TimelineDay(StrictModel):
 
 class WebUpload(DeviceRequest):
     days: list[SiteDay] = Field(min_length=1, max_length=31)
+
+
+# ── 应用名归一：PC 规则与安卓映射对照（供安卓同步工人对照，不作服务端校验）──
+# PC 端规则见 client/core/storage.py 的 canonical_app_name：先把名字转小写，
+# 再沿用户合并规则链一路追到最终父名（带循环检测），特殊处理是
+# chatgpt.exe 且 exe 路径含 openai.codex_ 时记为 codex.exe。服务端 timeline
+# 的 app_name 本就强制小写（见上 TimelineBin.app_only），不收 display_name。
+# 安卓端在上传前把包名映射为下面的 exe 风格归一键，与 PC 键完全一致，
+# 中文显示名只走旧汇总接口 POST /api/v1/upload 的 display_name，
+# timeline 不收 display_name。有电脑版的应用取 PC 的 exe 键
+# （微信 -> weixin.exe，QQ -> qq.exe，钉钉 -> dingtalk.exe）；没有电脑版的
+# 应用用 "<plain>.exe"（如抖音 -> douyin.exe）。企业微信在 PC 表中无对应
+# 项（飞书 feishu.exe 是另一个应用），按无电脑版处理为 wework.exe。
+# 回落规则：包名最后一段小写、去非字母数字，加 ".exe" 后缀；unknown 保持
+# unknown。被排除的应用不上传（只发 countedOnly=true 的会话），服务端
+# 不设映射表、不改名。
+ANDROID_PACKAGE_TO_APP_KEY = {
+    "com.tencent.mm": ("weixin.exe", "微信"),
+    "com.tencent.mobileqq": ("qq.exe", "QQ"),
+    "com.ss.android.ugc.aweme": ("douyin.exe", "抖音"),
+    "com.xingin.xhs": ("xiaohongshu.exe", "小红书"),
+    "com.bilibili.app.in": ("bilibili.exe", "哔哩哔哩"),
+    "com.taobao.taobao": ("taobao.exe", "淘宝"),
+    "com.alibaba.android.rimet": ("dingtalk.exe", "钉钉"),
+    "com.tencent.wework": ("wework.exe", "企业微信"),
+    "com.smile.gifmaker": ("kuaishou.exe", "快手"),
+    "com.zhihu.android": ("zhihu.exe", "知乎"),
+    "com.sina.weibo": ("weibo.exe", "微博"),
+}
 
 
 class TimelineUpload(DeviceRequest):

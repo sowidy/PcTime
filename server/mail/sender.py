@@ -24,6 +24,7 @@ from email.utils import formataddr, formatdate, make_msgid
 
 import config
 from db import mail_log, usage_records, users
+from mail import merge as mail_merge
 from mail import report
 
 log = logging.getLogger("pctime.mail.sender")
@@ -215,6 +216,147 @@ def send_day(user_key, day, email=None, dry_run=False, now=None):
     return {**out, "status": "sent", "reason": ""}
 
 
+def send_merged_day(devices, day, email, dry_run=False, now=None):
+    """Send one merged report for all devices sharing one mailbox.
+
+    ``devices`` is a group from mail.merge.group_devices_by_email, earliest
+    created first. One mail per mailbox per day: mail_log is keyed by the
+    earliest-created device (the anchor), with the merged device count in
+    the detail. Single-device groups never reach this function; they keep
+    going through send_day() with byte-identical behaviour.
+
+    Returns the same outcome dict shape as send_day(), plus
+    ``merged_devices``. Never raises: a failed address must not stop the
+    rest of the round.
+    """
+    day = day if isinstance(day, date) else date.fromisoformat(str(day))
+    weekly = is_weekly_day(day)
+    anchor = devices[0]
+    anchor_key = anchor["user_key"]
+    email = mail_merge.normalize_email(email)
+    out = {"user_key": anchor_key, "day": day.isoformat(), "email": email,
+           "subject": "", "weekly": weekly, "merged_devices": len(devices)}
+
+    if mail_log.was_mail_sent(anchor_key, day):
+        return {**out, "status": "skipped", "reason": "already_sent"}
+    if not email:
+        return {**out, "status": "skipped", "reason": "no_email"}
+
+    range_start, range_end = report.week_range(day) if weekly else (day, day)
+    range_days = {str(range_start + timedelta(days=i))
+                  for i in range((range_end - range_start).days + 1)}
+    named_summaries = []
+    site_rows, site_hours, site_intervals = [], [], []
+    app_intervals, timeline_rows, readiness = [], [], []
+    # Per-device intervals grouped by day: overlap is same-second *and*
+    # same-day, so weekly mail must never compare seconds across days.
+    per_device_intervals = []
+    for device in devices:
+        key = device["user_key"]
+        if weekly:
+            summary = usage_records.get_range_summary(key, range_start, range_end)
+        else:
+            summary = usage_records.get_daily_summary(key, day)
+        named_summaries.append((mail_merge.device_label(device), summary))
+        device_intervals = []
+        if config.MAIL_TRACKING_ENABLED:
+            from db import tracking
+            try:
+                site_rows.extend(tracking.read_range("web", key, range_start, range_end))
+                site_hours.extend(tracking.read_range("web_hourly", key, range_start, range_end))
+                site_intervals.extend(tracking.read_range("web_intervals", key, range_start, range_end))
+                # Intervals are fetched even for weekly mail: the weekly
+                # charts do not draw them, but overlap needs exact spans.
+                device_intervals = tracking.read_range("app_intervals", key, range_start, range_end)
+                app_intervals.extend(device_intervals)
+                timeline_rows.extend(tracking.read_range("timeline", key, range_start, range_end))
+                readiness.extend(tracking.readiness(key, range_start, range_end))
+            except Exception:
+                log.warning("合并报告 %s 数据不可用，继续生成其他报告内容", key, exc_info=True)
+        by_day = {}
+        for row in device_intervals:
+            if str(row.get("day", day)) in range_days:
+                by_day.setdefault(str(row.get("day", day)), []).append(
+                    (row["start_second"], row["end_second"]))
+        per_device_intervals.append(by_day)
+    merged = mail_merge.merge_app_summaries(named_summaries)
+    app_summary_missing = merged is None
+    if merged is None and site_rows:
+        merged = {"total_seconds": 0, "app_count": 0, "apps": [],
+                  "_app_summary_missing": True,
+                  "_devices": [{"label": mail_merge.device_label(d),
+                                "total_seconds": 0, "app_count": 0} for d in devices]}
+    if merged is None:
+        return {**out, "status": "skipped", "reason": "no_data"}
+
+    # Exact spans first: union intervals per app (for the Gantt) and union
+    # bins (for the heatmap / hourly stacking). Overlap is the seconds two
+    # or more devices were simultaneously in *any* app; bins alone cannot
+    # prove same-second overlap, so without intervals there is nothing to
+    # subtract and the merged total is just the plain sum.
+    union_intervals = mail_merge.union_intervals_by_app(app_intervals)
+    union_bins = mail_merge.union_bins_from_intervals(union_intervals)
+    if union_bins:
+        timeline_rows = union_bins
+        app_intervals = union_intervals
+        merged["daily_apps"] = mail_merge.daily_apps_from_bins(union_bins)
+        merged["days_with_data"] = len({str(r["day"]) for r in union_bins})
+    overlap = 0.0
+    for day_key in range_days:
+        overlap += mail_merge.compute_overlap_seconds(
+            [per_device.get(day_key, []) for per_device in per_device_intervals])
+    merged["_overlap_seconds"] = round(overlap, 1)
+    merged["total_seconds"] = round(
+        sum(float(d["total_seconds"]) for d in merged["_devices"]) - overlap, 1)
+    # Charts use per-app union bins (real spans, see mail.merge); keep the
+    # stacked-chart input on the same basis so it validates against them.
+    merged["_readiness"] = readiness
+
+    user = {"user_key": anchor_key, "email": email,
+            "hostname": anchor.get("hostname") or "", "platform": anchor.get("platform") or ""}
+    if app_summary_missing:
+        subject, text, html_body = report.build_missing_app_message(day, user, weekly)
+    elif weekly:
+        subject, text, html_body = report.build_weekly_message(day, merged, user)
+    else:
+        subject, text, html_body = report.build_message(day, merged, user)
+    if config.MAIL_TRACKING_ENABLED:
+        from mail.tracking_report import append_sections
+        try:
+            subject, text, html_body = append_sections(
+                (subject, text, html_body), merged, timeline_rows, site_rows,
+                range_start, range_end, readiness, site_hours=site_hours,
+                site_intervals=site_intervals, app_intervals=app_intervals)
+        except Exception:
+            log.warning("附加报告渲染失败，继续发送应用报告", exc_info=True)
+    out["subject"] = subject
+    detail_suffix = f" · 合并 {len(devices)} 台设备"
+
+    if dry_run:
+        return {**out, "status": "skipped", "reason": "dry_run"}
+
+    try:
+        send_mail(email, subject, text, html_body)
+    except Exception as e:                       # noqa: BLE001
+        detail = f"{type(e).__name__}: {e}{detail_suffix}"
+        try:
+            mail_log.record_mail(anchor_key, day, email, mail_log.MAIL_FAILED, detail, now=now)
+        except Exception as log_err:             # noqa: BLE001
+            log.warning("连失败记录都写不进去：%s", log_err)
+        log.warning("%s合并发送失败 day=%s to=%s：%s", "周报" if weekly else "日报", day, email, detail)
+        return {**out, "status": "failed", "reason": detail}
+
+    try:
+        mail_log.record_mail(anchor_key, day, email, mail_log.MAIL_SENT,
+                             subject + detail_suffix, now=now)
+    except Exception as e:                       # noqa: BLE001
+        log.warning("邮件已发出但记录失败 day=%s：%s", day, e)
+
+    log.info("%s合并已发送 day=%s to=%s devices=%d",
+             "周报" if weekly else "日报", day, email, len(devices))
+    return {**out, "status": "sent", "reason": ""}
+
+
 def run(day=None, catchup_days=0, dry_run=False, user_key=None, now=None):
     """给所有订阅用户发某一天的报告。
 
@@ -263,20 +405,31 @@ def run(day=None, catchup_days=0, dry_run=False, user_key=None, now=None):
             return result
         # 身份用调用方传进来的那个，不从查出来的行里再取一遍：少一个
         # 「行里恰好没有 user_key 这一列就 KeyError」的隐患。
-        targets = [{**user, "user_key": user_key}]
+        groups = [{"email": mail_merge.normalize_email(user.get("email")),
+                   "devices": [{**user, "user_key": user_key}]}]
     else:
-        targets = users.get_subscribers()
-        if not targets:
+        subscribers = users.get_subscribers()
+        if not subscribers:
             result["ok"] = True
             result["reason"] = "no_subscribers"
             return result
+        # 同一邮箱下的全部 user_key 视为同一人，合并成一封邮件；
+        # 不同邮箱仍各发各的，单设备行为与过去完全一致。
+        groups = mail_merge.group_devices_by_email(subscribers)
 
     for d in days:
-        for user in targets:
-            outcome = send_day(
-                user["user_key"], d,
-                email=user.get("email"), dry_run=dry_run, now=now,
-            )
+        for group in groups:
+            if len(group["devices"]) == 1:
+                device = group["devices"][0]
+                outcome = send_day(
+                    device["user_key"], d,
+                    email=device.get("email"), dry_run=dry_run, now=now,
+                )
+            else:
+                outcome = send_merged_day(
+                    group["devices"], d,
+                    email=group["email"], dry_run=dry_run, now=now,
+                )
             result[outcome["status"]] += 1
             result["results"].append(outcome)
 

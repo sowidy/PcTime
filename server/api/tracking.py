@@ -97,6 +97,11 @@ def upload_dataset(kind, req, authorization):
                         else:
                             count += store.replace_day(cur, "app_intervals", str(req.user_key), day.day,
                                                        [r.model_dump() for r in day.intervals], day.complete)
+                        # Android unlocks ride on the timeline upload; absent
+                        # means "old client / not an Android day" and leaves
+                        # any previously stored value alone.
+                        if getattr(day, "unlocks", None) is not None:
+                            store.save_unlocks(cur, str(req.user_key), day.day, day.unlocks)
     except pymysql.MySQLError:
         raise HTTPException(503, "写入失败，请稍后重试")
     return {"ok": True, "days_written": len(req.days), "rows_written": count}

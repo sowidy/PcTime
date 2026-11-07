@@ -104,11 +104,17 @@ def list_users(limit=100, offset=0):
 
 
 def get_subscribers():
-    """取出所有订阅了邮件的用户（邮箱 + user_key）。给 mail/sender.py 用。"""
+    """取出所有订阅了邮件的用户（邮箱 + user_key）。给 mail/sender.py 用。
+
+    额外带回 hostname / platform / created_at：同一邮箱下多台设备要合并
+    成一封邮件时，需要设备名做分设备小计，并以最早创建的 user_key 作为
+    mail_log 的键。按 created_at 升序返回，合并分组可直接取首个当锚点。
+    """
     with db_conn.connect() as conn:
         with conn.cursor() as cur:
             cur.execute(
-                "SELECT user_key, email FROM users"
+                "SELECT user_key, email, hostname, platform, created_at FROM users"
                 " WHERE subscribed = 1 AND email IS NOT NULL AND email <> ''"
+                " ORDER BY created_at ASC"
             )
             return cur.fetchall()

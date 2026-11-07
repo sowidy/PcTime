@@ -83,6 +83,16 @@ CREATE TABLE IF NOT EXISTS `app_timeline_intervals` (
   FOREIGN KEY (`user_key`) REFERENCES `users` (`user_key`) ON DELETE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
+CREATE TABLE IF NOT EXISTS `android_daily_stats` (
+  `user_key` CHAR(36) NOT NULL,
+  `day` DATE NOT NULL COMMENT '同步日, 自然日',
+  `unlocks` INT UNSIGNED NOT NULL DEFAULT 0 COMMENT '当天解锁次数, 由安卓在同步时刻实时统计, 与旧汇总 launches 的按应用启动次数不同',
+  `uploaded_at` DATETIME NOT NULL,
+  PRIMARY KEY (`user_key`,`day`),
+  FOREIGN KEY (`user_key`) REFERENCES `users` (`user_key`) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+  COMMENT='安卓设备每日解锁次数, 随时间线上传写入, 重复上传整行覆盖不累加';
+
 CREATE TABLE IF NOT EXISTS `tracking_uploads` (
   `user_key` CHAR(36) NOT NULL, `day` DATE NOT NULL, `kind` VARCHAR(16) NOT NULL,
   `complete` BOOLEAN NOT NULL DEFAULT FALSE, `uploaded_at` DATETIME NOT NULL,

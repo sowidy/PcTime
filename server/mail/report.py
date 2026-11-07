@@ -121,6 +121,47 @@ def _text_app_lines(apps, total, hidden_count, hidden_seconds):
     return lines
 
 
+def _merged_device_text_lines(summary):
+    """Merged-mail breakdown: per-device totals plus the overlap line.
+
+    Only for summaries built by mail.merge (``_devices`` with >= 2 entries).
+    Single-device mail is untouched. The overlap line must stay explicit:
+    merged total = devices summed - overlap, never silently deducted.
+    """
+    devices = summary.get("_devices") or []
+    if len(devices) < 2:
+        return []
+    lines = ["分设备："]
+    for device in devices:
+        lines.append(f"  • {device.get('label') or '未知设备'} — "
+                     f"{format_duration(device.get('total_seconds') or 0)}")
+    overlap = summary.get("_overlap_seconds")
+    if overlap:
+        lines.append(f"双设备重叠：{format_duration(overlap)}"
+                     f"（同一秒两台设备都有记录，已从合并总计中扣除）")
+    return lines
+
+
+def _merged_device_html(summary):
+    """HTML version of the breakdown above (device rows + overlap row)."""
+    devices = summary.get("_devices") or []
+    if len(devices) < 2:
+        return ""
+    rows = "".join(
+        f'<div style="color:#5f6368;font-size:13px;margin-top:2px;">'
+        f'{html.escape(str(device.get("label") or "未知设备"))}：'
+        f'{html.escape(format_duration(device.get("total_seconds") or 0))}</div>'
+        for device in devices)
+    overlap = summary.get("_overlap_seconds")
+    overlap_row = (
+        f'<div style="color:#5f6368;font-size:13px;margin-top:2px;">'
+        f'双设备重叠：{html.escape(format_duration(overlap))}'
+        f'（同一秒两台设备都有记录，已从合并总计中扣除）</div>'
+        if overlap else "")
+    return (f'<div style="margin-top:8px;"><div style="color:#5f6368;'
+            f'font-size:13px;">分设备：</div>{rows}{overlap_row}</div>')
+
+
 def _html_device_row(user):
     """设备名那一行（HTML 版）。不知道机器名就返回空串，整行不出现。"""
     if user and user.get("hostname"):
@@ -202,6 +243,9 @@ def build_text(day, summary, user=None):
     if user and user.get("hostname"):
         lines.append(f"设备：{user['hostname']}")
     lines += [f"总计：{format_duration(total)}，共 {app_count} 个应用", ""]
+    lines += _merged_device_text_lines(summary)
+    if summary.get("_devices") and len(summary["_devices"]) >= 2:
+        lines += [""]
     lines += _text_app_lines(apps, total, hidden_count, hidden_seconds)
     lines += ["", "-" * 24, FOOTER_TEXT]
     return "\n".join(lines)
@@ -214,7 +258,7 @@ def build_html(day, summary, user=None):
     return _html_shell(
         heading=f"{html.escape(day.isoformat())} 使用报告",
         totals_html=_html_totals(total, app_count),
-        extra_html=_html_device_row(user),
+        extra_html=_html_device_row(user) + _merged_device_html(summary),
         rows=[],
     )
 
@@ -268,6 +312,9 @@ def build_weekly_text(day, summary, user=None):
     if user and user.get("hostname"):
         lines.append(f"设备：{user['hostname']}")
     lines += [f"总计：{format_duration(total)}，共 {app_count} 个应用", ""]
+    lines += _merged_device_text_lines(summary)
+    if summary.get("_devices") and len(summary["_devices"]) >= 2:
+        lines += [""]
     lines += _text_app_lines(apps, total, hidden_count, hidden_seconds)
     lines += ["", "-" * 24, FOOTER_TEXT]
     return "\n".join(lines)
@@ -288,7 +335,7 @@ def build_weekly_html(day, summary, user=None):
         heading=(f"{html.escape(start.isoformat())} ~ "
                  f"{html.escape(end.isoformat())} 周报"),
         totals_html=_html_totals(total, app_count),
-        extra_html=period_row + _html_device_row(user),
+        extra_html=period_row + _html_device_row(user) + _merged_device_html(summary),
         rows=[application_chart(summary, start, end)],
     )
 
