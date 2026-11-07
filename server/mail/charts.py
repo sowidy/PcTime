@@ -409,31 +409,30 @@ def _spans_by_key(rows, day, key):
     return {name: _merged_spans(spans) for name, spans in by_key.items()}
 
 
-def timeline_segments(summary, app_intervals, site_intervals, day, sources=None):
+def timeline_segments(summary, app_intervals, site_intervals, day):
     """(app_segments, first_second, last_second) for the daily timeline.
 
     One fused timeline: segments follow the real spans, not fixed hourly
     slots, and only cover the span from first to last activity. Each
     segment is (start, end, key, label, site_subs): the app that owned
-    that stretch of the day, with the label as a Chinese display name plus
-    the P/C/M marker, e.g. '抖音 (M)'. When the winning app is a browser,
-    site_subs splits the segment by the most-used site in each stretch:
-    (start, end, host, site name). Empty when the day has no app intervals.
+    that stretch of the day, with the label as the plain Chinese display
+    name, e.g. '抖音'. When the winning app is a browser, site_subs splits
+    the segment by the site visited in each stretch: (start, end, host,
+    site name). Empty when the day has no app intervals.
     """
     app_spans = _spans_by_key(app_intervals, day, "app_name")
     if not app_spans:
         return [], 0, 0
-    first = min(start for spans in app_spans.values() for start, _ in spans)
-    last = max(end for spans in app_spans.values() for _, end in spans)
+    # Spans belong to this day; clamp sloppy over-midnight ends to 24:00
+    # so the axis never runs past the day.
+    first = max(0, min(start for spans in app_spans.values() for start, _ in spans))
+    last = min(86400, max(end for spans in app_spans.values() for _, end in spans))
+    if last <= first:
+        return [], 0, 0
     names = {app["app_name"]: app.get("display_name") or app["app_name"]
              for app in summary.get("apps") or []}
     site_spans = _spans_by_key(site_intervals, day, "host")
     site_names = names_for_hosts(list(site_spans))
-
-    def marked(key, display):
-        marker = (sources or {}).get(key)
-        return f"{display} ({marker})" if marker else display
-
     app_segments = []
     for start, end, key in _sweep_segments(app_spans, first, last):
         if key is None:
@@ -443,22 +442,78 @@ def timeline_segments(summary, app_intervals, site_intervals, day, sources=None)
             subs = [(sub_start, sub_end, host, site_names.get(host, host))
                     for sub_start, sub_end, host in
                     _sweep_segments(site_spans, start, end) if host is not None]
-        app_segments.append((start, end, key, marked(key, names.get(key, key)), subs))
+        app_segments.append((start, end, key, names.get(key, key), subs))
     return app_segments, first, last
 
 
-def daily_winner_timeline(summary, app_intervals, site_intervals, day, sources=None):
+def _bar_rect(draw, x0, y0, x1, y1, fill, rounded=True):
+    """A bar segment that can never invert.
+
+    Extremely short spans map to under 2px, and the old +1/-1 insets made
+    the right edge smaller than the left, which Pillow rejects. Clamp the
+    width to at least 2px; round the corners only when the bar is wide
+    enough for the radius.
+    """
+    x0 = round(x0)
+    x1 = max(round(x1), x0 + 2)
+    if rounded and x1 - x0 >= 12:
+        draw.rounded_rectangle((x0, y0, x1, y1), radius=6, fill=fill)
+    else:
+        draw.rectangle((x0, y0, x1, y1), fill=fill)
+
+
+def _fit_label(label, font, max_width=150):
+    """Shorten a label to fit, keeping it readable; the Gantt below has full names."""
+    if font.getlength(label) <= max_width:
+        return label
+    while len(label) > 1 and font.getlength(label + "...") > max_width:
+        label = label[:-1]
+    return label + "..."
+
+
+def _assign_label_rows(items, font):
+    """Assign each (center, label, prefer_above) to a label row.
+
+    Rows stagger above the bar (y 48, 30) and below it (y 120, 138), so
+    names alternate levels instead of sharing one line and many more fit.
+    Tries the preferred side's near row first, then the other side's near
+    row, then the far rows; a label that fits no row is dropped (None).
+    Returns [(label, row_y, center)] with None for dropped labels.
+    """
+    near = {True: 48, False: 120}
+    far = {True: 30, False: 138}
+    placed = {(above, y): [] for above in (True, False) for y in (48, 30, 120, 138)}
+    out = []
+    for center, label, prefer_above in items:
+        label = _fit_label(label, font)
+        width = font.getlength(label)
+        span = (center - width / 2, center + width / 2)
+        assigned = None
+        for above, y in ((prefer_above, near[prefer_above]),
+                         (not prefer_above, near[not prefer_above]),
+                         (prefer_above, far[prefer_above]),
+                         (not prefer_above, far[not prefer_above])):
+            taken = placed[(above, y)]
+            if all(span[1] + 4 < start or span[0] - 4 > end for start, end in taken):
+                taken.append(span)
+                assigned = (label, y, center)
+                break
+        out.append(assigned)
+    return out
+
+
+def daily_winner_timeline(summary, app_intervals, site_intervals, day):
     """One horizontal timeline for the top of the daily mail.
 
-    Segments follow the real usage spans across the day's data range; the
-    app name sits above or below each segment, and browser segments are
-    split inside by the websites visited. Labels are placed greedily so
-    neighbors on the same side never collide; a label that fits nowhere is
-    dropped (the Gantt below has the full detail). '' when the day has no
-    app intervals.
+    Segments follow the real usage spans across the day's data range.
+    Each app is named by its plain display name, staggered across four
+    label rows so many more names fit; browser segments show the website
+    visited instead of the browser name, written inside the site block
+    when it fits, otherwise on a label row. '' when the day has no app
+    intervals.
     """
     app_segments, first, last = timeline_segments(
-        summary, app_intervals, site_intervals, day, sources)
+        summary, app_intervals, site_intervals, day)
     if not app_segments or last <= first:
         return ""
     label_font = cjk_font(14) or ImageFont.load_default(size=14)
@@ -468,7 +523,7 @@ def daily_winner_timeline(summary, app_intervals, site_intervals, day, sources=N
     def x(second):
         return left + (right - left) * (second - first) / (last - first)
 
-    image = Image.new("RGB", (1200, 156), theme.BACKGROUND)
+    image = Image.new("RGB", (1200, 196), theme.BACKGROUND)
     draw = ImageDraw.Draw(image)
     palette = color_map([key for _, _, key, _, _ in app_segments] +
                         [host for _, _, _, _, subs in app_segments
@@ -477,59 +532,39 @@ def daily_winner_timeline(summary, app_intervals, site_intervals, day, sources=N
     last_hour = int(-(-last // 3600))
     for hour in range(first_hour, last_hour + 1):
         pos = round(x(hour * 3600))
-        draw.line((pos, 40, pos, 122), fill=theme.GRID, width=2)
-        draw.text((pos, 130), f"{hour:02d}:00", fill=theme.AXIS, font=small, anchor="mt")
-    draw.rounded_rectangle((left, 48, right, 84), radius=6, fill="#EDF0F3")
+        draw.line((pos, 22, pos, 158), fill=theme.GRID, width=2)
+        draw.text((pos, 168), f"{hour:02d}:00", fill=theme.AXIS, font=small, anchor="mt")
+    draw.rounded_rectangle((left, 66, right, 102), radius=6, fill="#EDF0F3")
     for start, end, key, _, subs in app_segments:
-        draw.rounded_rectangle((round(x(start)) + 1, 48, round(x(end)) - 1, 84),
-                               radius=6, fill=palette[key])
+        _bar_rect(draw, x(start) + 1, 66, x(end) - 1, 102, palette[key])
         for sub_start, sub_end, host, _ in subs:
-            draw.rectangle((round(x(sub_start)), 48, round(x(sub_end)), 84),
-                           fill=palette[host])
+            _bar_rect(draw, x(sub_start), 66, x(sub_end), 102, palette[host],
+                      rounded=False)
         for sub_start, _, _, _ in subs:
-            draw.line((round(x(sub_start)), 48, round(x(sub_start)), 84),
+            draw.line((round(x(sub_start)), 66, round(x(sub_start)), 102),
                       fill="#ffffff", width=2)
-    placed_above, placed_below = [], []
-
-    def fit_label(label):
-        max_width = 150
-        if label_font.getlength(label) <= max_width:
-            return label
-        if " (" in label:
-            base, marker = label.rsplit(" (", 1)
-            suffix = " (" + marker
-        else:
-            base, suffix = label, ""
-        while len(base) > 1 and label_font.getlength(base + "..." + suffix) > max_width:
-            base = base[:-1]
-        return base + "..." + suffix
-
-    def place(center, label, prefer_above):
-        label = fit_label(label)
-        width = label_font.getlength(label)
-        span = (center - width / 2, center + width / 2)
-        for above in ([True, False] if prefer_above else [False, True]):
-            placed = placed_above if above else placed_below
-            if all(span[1] + 4 < start or span[0] - 4 > end for start, end in placed):
-                placed.append(span)
-                draw.text((center, 30 if above else 102), label, fill=theme.TEXT,
-                          font=label_font, anchor="mm")
-                return
-        # Fits nowhere: skip it rather than overlap a neighbor.
-
+    items = []
     for index, (start, end, _, label, subs) in enumerate(app_segments):
         center = (x(start) + x(end)) / 2
-        # Browser segments keep the app name above; their site names go below.
-        place(center, label, prefer_above=bool(subs) or index % 2 == 0)
-        for sub_start, sub_end, _, site_label in subs:
-            block_left, block_right = x(sub_start), x(sub_end)
-            # Prefer the name inside its own block (the palette is light,
-            # so dark text reads); otherwise fall back to below the bar.
-            if label_font.getlength(site_label) + 4 <= block_right - block_left:
-                draw.text(((block_left + block_right) / 2, 66), site_label,
-                          fill=theme.TEXT, font=label_font, anchor="mm")
-            elif block_right - block_left >= 20:
-                place((block_left + block_right) / 2, site_label, prefer_above=False)
+        if subs:
+            # Browser: show the websites, not the browser name.
+            for sub_start, sub_end, _, site_label in subs:
+                block_left, block_right = x(sub_start), x(sub_end)
+                # Prefer the name inside its own block (the palette is
+                # light, so dark text reads); otherwise a label row.
+                if label_font.getlength(site_label) + 4 <= block_right - block_left:
+                    draw.text(((block_left + block_right) / 2, 84), site_label,
+                              fill=theme.TEXT, font=label_font, anchor="mm")
+                elif block_right - block_left >= 20:
+                    items.append(((block_left + block_right) / 2, site_label, False))
+        else:
+            items.append((center, label, index % 2 == 0))
+    for assigned in _assign_label_rows(items, label_font):
+        if assigned is None:
+            continue  # Fits nowhere: skip it rather than overlap a neighbor.
+        label, row_y, center = assigned
+        draw.text((center, row_y), label, fill=theme.TEXT,
+                  font=label_font, anchor="mm")
     encoded = base64.b64encode(_encode_png(image)).decode("ascii")
     return (f'<h2 style="font-size:18px;color:{theme.TEXT};margin:24px 0 8px">今日时间线</h2>'
             f'<p style="font-size:12px;color:#8592a3">一天的使用轨迹；浏览器时段按网站细分</p>'

@@ -37,24 +37,32 @@ def render(summary, timeline_rows, site_rows, start, end, readiness=(), site_hou
     text, markup = [], []
     if not weekly:
         # The winner timeline opens the mail, ahead of the Gantt charts.
-        app_segments, _, _ = timeline_segments(
-            summary, app_intervals, site_intervals, start,
-            sources=summary.get("_app_sources"))
+        # A timeline failure must never take down the rest of the mail:
+        # without this, one bad chart falls back to the plain old report.
+        try:
+            app_segments, _, _ = timeline_segments(
+                summary, app_intervals, site_intervals, start)
+        except Exception:
+            app_segments = []
         if app_segments:
-            markup.append(daily_winner_timeline(
-                summary, app_intervals, site_intervals, start,
-                sources=summary.get("_app_sources")))
+            try:
+                markup.append(daily_winner_timeline(
+                    summary, app_intervals, site_intervals, start))
+            except Exception:
+                pass
 
             def _hhmm(seconds):
                 return f"{int(seconds // 3600):02d}:{int(seconds % 3600 // 60):02d}"
 
             parts = []
             for seg_start, seg_end, _, label, subs in app_segments:
-                part = f"{_hhmm(seg_start)}-{_hhmm(seg_end)} {label}"
                 if subs:
-                    part += "（" + "、".join(
+                    # Browser: the websites are the story, not the browser.
+                    part = (f"{_hhmm(seg_start)}-{_hhmm(seg_end)} " + "、".join(
                         f"{site} {_hhmm(sub_start)}-{_hhmm(sub_end)}"
-                        for sub_start, sub_end, _, site in subs) + "）"
+                        for sub_start, sub_end, _, site in subs))
+                else:
+                    part = f"{_hhmm(seg_start)}-{_hhmm(seg_end)} {label}"
                 parts.append(part)
             text.append("时间线：" + "；".join(parts))
     if not weekly and summary.get("apps"):
@@ -109,8 +117,7 @@ def append_sections(message, summary, timeline_rows, site_rows, start, end,
     if html_size(body + extra_html) > 80000:
         # Keep website charts when a long site list exceeds the HTML budget.
         # The timeline stays first: it is the opening section of the mail.
-        extra_html = ((daily_winner_timeline(summary, app_intervals, site_intervals, start,
-                                             sources=summary.get("_app_sources"))
+        extra_html = ((daily_winner_timeline(summary, app_intervals, site_intervals, start)
                        if start == end else "") +
                       (application_gantt_chart(summary, app_intervals, start,
                                                overlap_by_app=summary.get("_app_overlap_seconds"),

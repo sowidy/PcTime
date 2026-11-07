@@ -659,26 +659,64 @@ class TestWinnerTimeline(unittest.TestCase):
             {"day": str(DAY), "host": "douyin.com", "start_second": 36000, "end_second": 38400},
             {"day": str(DAY), "host": "chatgpt.com", "start_second": 38400, "end_second": 39000},
         ]
-        sources = {"chrome.exe": "C", "weixin.exe": "M", "douyin.exe": "P"}
         app_segments, first, last = timeline_segments(
-            summary, app_intervals, site_intervals, DAY, sources)
+            summary, app_intervals, site_intervals, DAY)
         # Weixin ran 09:00-10:00 on PC and 09:30-10:30 on the phone: one
         # continuous 90-minute run across the device switch, so it owns the
         # contested 10:00-10:30 stretch over chrome's 50-minute run, and
         # chrome only takes 10:30-10:50. A per-device sum would have split
         # the weixin run at the switch and told the wrong story.
+        # Labels are plain display names: no P/C/M marker on the timeline.
         self.assertEqual((first, last), (32400, 82800))
         self.assertEqual(app_segments, [
-            (32400, 37800, "weixin.exe", "微信 (M)", []),
-            (37800, 39000, "chrome.exe", "Chrome 浏览器 (C)",
+            (32400, 37800, "weixin.exe", "微信", []),
+            (37800, 39000, "chrome.exe", "Chrome 浏览器",
              [(37800, 38400, "douyin.com", "抖音"),
               (38400, 39000, "chatgpt.com", "ChatGPT")]),
-            (75600, 82800, "douyin.exe", "抖音 (P)", []),
+            (75600, 82800, "douyin.exe", "抖音", []),
         ])
         html_body = daily_winner_timeline(
-            summary, app_intervals, site_intervals, DAY, sources)
+            summary, app_intervals, site_intervals, DAY)
         self.assertIn("今日时间线", html_body)
         self.assertIn("data:image/png", html_body)
+
+    def test_timeline_survives_sub_two_pixel_fragments(self):
+        # A day of 45-second fragments: each maps to about 1px, and the old
+        # +1/-1 insets inverted the rectangle (x1 < x0) and crashed the
+        # whole mail into the plain old report. Every fragment must draw.
+        from mail.charts import daily_winner_timeline
+        summary = {"apps": [
+            {"app_name": "weixin.exe", "display_name": "微信", "seconds": 5000},
+            {"app_name": "douyin.exe", "display_name": "抖音", "seconds": 3000},
+            {"app_name": "chrome.exe", "display_name": "Chrome 浏览器", "seconds": 2000}]}
+        intervals = []
+        start = 25200
+        for i in range(60):
+            app = ["weixin.exe", "douyin.exe", "chrome.exe"][i % 3]
+            intervals.append({"day": str(DAY), "app_name": app,
+                              "start_second": start, "end_second": start + 45})
+            start += 900
+        sites = [{"day": str(DAY), "host": "douyin.com",
+                  "start_second": 30000, "end_second": 30040}]
+        html_body = daily_winner_timeline(summary, intervals, sites, DAY)
+        self.assertIn("data:image/png", html_body)
+
+    def test_label_rows_stagger_dense_names(self):
+        # Eight close labels must all find a row across the four staggered
+        # levels instead of sharing one line and dropping most of them.
+        from mail.charts import _assign_label_rows, _fit_label, cjk_font
+        from PIL import ImageFont
+        # Measure with the real CJK font: load_default has no CJK glyphs
+        # and would under-measure these labels by half.
+        font = cjk_font(14) or ImageFont.load_default(size=14)
+        # Eight ~112px labels 40px apart, all preferring above: neighbours
+        # cannot share a row, so placement must spill into a third level.
+        items = [(100 + i * 40, "应用名称测试一二", True) for i in range(8)]
+        placed = _assign_label_rows(items, font)
+        self.assertEqual(len([p for p in placed if p is not None]), 8)
+        rows_used = {p[1] for p in placed if p is not None}
+        self.assertGreaterEqual(len(rows_used), 3)
+        self.assertEqual(_fit_label("Chrome 浏览器", font), "Chrome 浏览器")
 
     def test_timeline_empty_day(self):
         from mail.charts import daily_winner_timeline, timeline_segments
